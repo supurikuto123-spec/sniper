@@ -251,9 +251,9 @@ export class PumpMonitor extends EventEmitter {
       console.log(`║  NEW TOKEN DETECTED: ${token.symbol.padEnd(29)} ║`);
       console.log('╚════════════════════════════════════════════════════╝');
       console.log(`  Mint: ${mint}`);
-      console.log(`  Price: $${token.priceUsd.toFixed(10)}`);
-      console.log(`  Market Cap: $${token.marketCap.toFixed(2)}`);
-      console.log(`  Liquidity: $${token.liquidityUsd.toFixed(2)}`);
+      console.log(`  Price: $${(token.priceUsd || 0).toFixed(10)}`);
+      console.log(`  Market Cap: $${(token.marketCap || 0).toFixed(2)}`);
+      console.log(`  Liquidity: $${(token.liquidityUsd || 0).toFixed(2)}`);
       console.log(`  TX: https://solscan.io/tx/${signature}`);
       console.log('');
 
