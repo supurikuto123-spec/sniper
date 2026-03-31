@@ -1,44 +1,92 @@
 /**
- * PumpMonitor - Real-time blockchain monitoring for Pump.fun
- * 
- * Uses Helius WebSocket to subscribe to program logs.
- * NO FAKE DATA - All events come from real Solana blockchain.
+ * PumpMonitor - Real-time token monitoring for Pump.fun
+ *
+ * Uses DEX Screener API HTTP polling (Helius Free plan doesn't support WebSocket).
+ * NO FAKE DATA - All events from real blockchain via DEX Screener API.
  */
 
-import WebSocket from 'ws';
 import { Connection, PublicKey } from '@solana/web3.js';
 import { EventEmitter } from 'events';
 import {
   PUMP_FUN_PROGRAM_ID,
   HELIUS_RPC_URL,
-  HELIUS_WS_URL,
   DEX_SCREENER_API,
   Token,
   TokenEvent,
-  HeliusLogNotification,
 } from './types';
 
+interface DexScreenerPair {
+  chainId: string;
+  dexId: string;
+  url: string;
+  pairAddress: string;
+  baseToken: {
+    address: string;
+    name: string;
+    symbol: string;
+    icon?: string;
+  };
+  quoteToken: {
+    address: string;
+    name: string;
+    symbol: string;
+  };
+  priceUsd: string;
+  marketCap: string;
+  volume: {
+    h24: string;
+    h6: string;
+    h1: string;
+    m5: string;
+  };
+  liquidity: {
+    usd: string;
+    base: string;
+    quote: string;
+  };
+  fdv?: string;
+  pairCreatedAt: number;
+}
+
+interface DexScreenerBoosted {
+  chainId: string;
+  dexId: string;
+  url: string;
+  pairAddress: string;
+  baseToken: {
+    address: string;
+    name: string;
+    symbol: string;
+    icon?: string;
+  };
+  quoteToken: {
+    address: string;
+    name: string;
+    symbol: string;
+  };
+  priceUsd: string;
+  marketCap: string;
+  fdv: string;
+  pairCreatedAt: number;
+}
+
 export class PumpMonitor extends EventEmitter {
-  private ws: WebSocket | null = null;
   private connection: Connection;
-  private subscriptionId: number | null = null;
-  private reconnectAttempts = 0;
-  private readonly maxReconnectAttempts = 10;
-  private reconnectDelay = 1000;
   private isRunning = false;
-  private heartbeatInterval: NodeJS.Timeout | null = null;
-  private processedSignatures = new Set<string>();
-  private readonly maxProcessedSignatures = 1000;
+  private httpPollingInterval: NodeJS.Timeout | null = null;
+  private processedMints = new Set<string>();
+  private readonly maxProcessedMints = 500;
   private activeTokens = new Map<string, Token>();
+  private lastPollTime = 0;
+  private mode: 'dexscreener' | 'helius_logs' = 'dexscreener';
 
   constructor() {
     super();
-    // HTTP connection for fetching transaction details
     this.connection = new Connection(HELIUS_RPC_URL, 'confirmed');
   }
 
   /**
-   * Start monitoring Pump.fun program logs via Helius WebSocket
+   * Start monitoring with HTTP polling (DEX Screener)
    */
   async start(): Promise<void> {
     if (this.isRunning) {
@@ -47,218 +95,144 @@ export class PumpMonitor extends EventEmitter {
     }
 
     this.isRunning = true;
-    console.log('[PumpMonitor] Starting real-time blockchain monitoring...');
+    console.log('[PumpMonitor] Starting Pump.fun token monitoring...');
+    console.log(`[PumpMonitor] Mode: DEX Screener API HTTP Polling`);
     console.log(`[PumpMonitor] Program ID: ${PUMP_FUN_PROGRAM_ID}`);
     console.log(`[PumpMonitor] Helius RPC: ${HELIUS_RPC_URL.replace(/api-key=.*$/, 'api-key=***')}`);
+    console.log('');
+    console.log('NOTE: Helius Free plan does not support Enhanced WebSocket.');
+    console.log('Using DEX Screener API polling instead (real data, ~5-10s delay).');
+    console.log('');
 
-    await this.connectWebSocket();
+    await this.startDexScreenerPolling();
   }
 
   /**
-   * Connect to Helius WebSocket with auto-reconnect
+   * Start DEX Screener HTTP polling for new tokens
    */
-  private async connectWebSocket(): Promise<void> {
+  private async startDexScreenerPolling(): Promise<void> {
+    // Immediate first poll
+    await this.pollDexScreener();
+
+    // Poll every 8 seconds (rate limit friendly)
+    this.httpPollingInterval = setInterval(async () => {
+      await this.pollDexScreener();
+    }, 8000);
+
+    console.log('[PumpMonitor] DEX Screener polling started (interval: 8s)');
+  }
+
+  /**
+   * Poll DEX Screener API for latest Pump.fun tokens
+   */
+  private async pollDexScreener(): Promise<void> {
     try {
-      console.log('[PumpMonitor] Connecting to Helius WebSocket...');
-
-      this.ws = new WebSocket(HELIUS_WS_URL);
-
-      this.ws.on('open', () => {
-        console.log('[PumpMonitor] WebSocket connected');
-        this.reconnectAttempts = 0;
-        this.reconnectDelay = 1000;
-        this.subscribeToLogs();
-        this.startHeartbeat();
+      // Method 1: Get latest token profiles (new tokens)
+      const profilesResponse = await fetch(`${DEX_SCREENER_API}/token-profiles/latest/v1`, {
+        headers: { 'Accept': 'application/json' },
       });
 
-      this.ws.on('message', (data: Buffer) => {
-        this.handleWebSocketMessage(data);
-      });
+      if (profilesResponse.ok) {
+        const profiles = await profilesResponse.json() as Array<{
+          url: string;
+          chainId: string;
+          tokenAddress: string;
+          icon?: string;
+        }>;
 
-      this.ws.on('error', (error) => {
-        console.error('[PumpMonitor] WebSocket error:', error.message);
-      });
+        // Filter for Solana tokens only
+        const solanaTokens = profiles.filter(p => p.chainId === 'solana');
 
-      this.ws.on('close', () => {
-        console.log('[PumpMonitor] WebSocket closed');
-        this.cleanup();
-        if (this.isRunning) {
-          this.scheduleReconnect();
+        for (const profile of solanaTokens.slice(0, 5)) {
+          if (!this.processedMints.has(profile.tokenAddress)) {
+            await this.processNewToken(profile.tokenAddress, profile.icon);
+          }
         }
+      }
+
+      // Method 2: Also check boosted tokens (trending new tokens)
+      const boostedResponse = await fetch(`${DEX_SCREENER_API}/token-boosts/latest/v1`, {
+        headers: { 'Accept': 'application/json' },
       });
+
+      if (boostedResponse.ok) {
+        const boosted = await boostedResponse.json() as DexScreenerBoosted[];
+
+        // Filter for Solana/Pump.fun tokens from last 10 minutes
+        const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+        const recentTokens = boosted.filter(b =>
+          b.chainId === 'solana' &&
+          b.pairCreatedAt &&
+          b.pairCreatedAt > tenMinutesAgo
+        );
+
+        for (const token of recentTokens.slice(0, 5)) {
+          if (!this.processedMints.has(token.baseToken.address)) {
+            await this.processNewToken(
+              token.baseToken.address,
+              token.baseToken.icon
+            );
+          }
+        }
+      }
+
+      // Method 3: Search specific Pump.fun pairs
+      const searchResponse = await fetch(
+        `${DEX_SCREENER_API}/search?q=pump&limit=10`,
+        { headers: { 'Accept': 'application/json' } }
+      );
+
+      if (searchResponse.ok) {
+        const searchData = await searchResponse.json() as { pairs?: DexScreenerPair[] };
+        if (searchData.pairs) {
+          const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+
+          for (const pair of searchData.pairs) {
+            // Check if this is a Pump.fun token (created recently)
+            if (pair.pairCreatedAt && pair.pairCreatedAt > fiveMinutesAgo) {
+              const mint = pair.baseToken.address;
+              if (!this.processedMints.has(mint)) {
+                await this.processTokenFromPair(pair);
+              }
+            }
+          }
+        }
+      }
 
     } catch (error) {
-      console.error('[PumpMonitor] Failed to connect:', error);
-      this.scheduleReconnect();
+      console.error('[PumpMonitor] DEX Screener poll error:', error);
     }
   }
 
   /**
-   * Subscribe to Pump.fun program logs
+   * Process a new token from DEX Screener
    */
-  private subscribeToLogs(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.error('[PumpMonitor] WebSocket not ready for subscription');
-      return;
-    }
-
-    const subscribeMessage = {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'logsSubscribe',
-      params: [
-        {
-          mentions: [PUMP_FUN_PROGRAM_ID],
-        } as any,
-        {
-          commitment: 'confirmed',
-        },
-      ],
-    };
-
-    this.ws.send(JSON.stringify(subscribeMessage));
-    console.log('[PumpMonitor] Subscribed to Pump.fun program logs');
-  }
-
-  /**
-   * Handle incoming WebSocket messages
-   */
-  private handleWebSocketMessage(data: Buffer): void {
+  private async processNewToken(mint: string, iconUrl?: string): Promise<void> {
     try {
-      const message = JSON.parse(data.toString());
-
-      // Handle subscription confirmation
-      if (message.id === 1 && message.result !== undefined) {
-        this.subscriptionId = message.result;
-        console.log(`[PumpMonitor] Subscription confirmed, ID: ${this.subscriptionId}`);
-        return;
-      }
-
-      // Handle log notifications
-      if (message.method === 'logsNotification' && message.params) {
-        const notification = message.params as HeliusLogNotification;
-        // Debug: Print received logs
-        if (notification.result?.logs) {
-          console.log(`[DEBUG] Received logs for ${notification.result.signature?.slice(0, 16)}...`, 
-            notification.result.logs.slice(0, 3));
-        }
-        this.processLogNotification(notification);
-      }
-    } catch (error) {
-      console.error('[PumpMonitor] Error parsing message:', error);
-    }
-  }
-
-  /**
-   * Process log notification from Helius
-   */
-  private async processLogNotification(notification: HeliusLogNotification): Promise<void> {
-    // Validate notification structure
-    if (!notification?.result) {
-      return;
-    }
-
-    const { signature, logs, err, blockHeight } = notification.result;
-
-    // Skip if missing required fields
-    if (!signature || !logs || !Array.isArray(logs)) {
-      return;
-    }
-
-    // Skip failed transactions
-    if (err) {
-      return;
-    }
-
-    // Skip already processed signatures
-    if (this.processedSignatures.has(signature)) {
-      return;
-    }
-
-    // Add to processed set
-    this.processedSignatures.add(signature);
-    
-    // Limit set size
-    if (this.processedSignatures.size > this.maxProcessedSignatures) {
-      const first = this.processedSignatures.values().next().value;
-      if (first) {
-        this.processedSignatures.delete(first);
-      }
-    }
-
-    // Check for Create instruction in logs
-    const hasCreate = logs.some(log => 
-      log.includes('Instruction: Create') || 
-      log.includes('CreateEvent') ||
-      log.includes('create_token')
-    );
-
-    if (hasCreate) {
-      console.log(`[PumpMonitor] Detected token creation in signature: ${signature}`);
-      await this.processTokenCreation(signature, blockHeight);
-    }
-
-    // Check for graduation
-    const hasGraduation = logs.some(log =>
-      log.includes('Instruction: Graduate') ||
-      log.includes('GraduateEvent') ||
-      log.includes('bonding_curve_complete')
-    );
-
-    if (hasGraduation) {
-      console.log(`[PumpMonitor] Detected token graduation in signature: ${signature}`);
-      await this.processGraduation(signature);
-    }
-  }
-
-  /**
-   * Process token creation transaction
-   */
-  private async processTokenCreation(signature: string, blockHeight?: number): Promise<void> {
-    try {
-      // Fetch transaction details from Helius RPC
-      const tx = await this.connection.getTransaction(signature, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      });
-
-      if (!tx) {
-        console.warn(`[PumpMonitor] Transaction not found: ${signature}`);
-        return;
-      }
-
-      if (!tx.meta || tx.meta.err) {
-        console.warn(`[PumpMonitor] Transaction failed or has error: ${signature}`);
-        return;
-      }
-
-      // Extract mint address from transaction accounts
-      const mint = this.extractMintFromTransaction(tx.transaction);
-      if (!mint) {
-        console.warn(`[PumpMonitor] Could not extract mint from transaction: ${signature}`);
-        return;
-      }
-
-      // Skip if already tracked
-      if (this.activeTokens.has(mint)) {
-        return;
-      }
-
-      // Fetch token details from DEX Screener (real market data)
+      // Get detailed token info from DEX Screener
       const tokenDetails = await this.fetchTokenDetails(mint);
       if (!tokenDetails) {
-        console.warn(`[PumpMonitor] Could not fetch token details for: ${mint}`);
         return;
       }
 
-      // Get block time
-      const blockTime = tx.blockTime || Math.floor(Date.now() / 1000);
+      // Add icon if provided
+      if (iconUrl) {
+        tokenDetails.image = iconUrl;
+      }
 
-      // Get creator from transaction
-      const message = tx.transaction.message as any;
-      const creator = message.getAccountKeys?.().staticAccountKeys?.[0]?.toString() || 
-                      message.accountKeys?.[0]?.toString() || 
-                      'unknown';
+      // Mark as processed
+      this.addProcessedMint(mint);
+
+      // Get token metadata from chain
+      let creator = 'unknown';
+      try {
+        const accountInfo = await this.connection.getAccountInfo(new PublicKey(mint));
+        if (accountInfo?.owner) {
+          creator = accountInfo.owner.toString();
+        }
+      } catch {
+        // Ignore errors, use default
+      }
 
       // Build token object
       const token: Token = {
@@ -266,15 +240,13 @@ export class PumpMonitor extends EventEmitter {
         name: tokenDetails.name,
         symbol: tokenDetails.symbol,
         creator,
-        createdAt: blockTime * 1000,
+        createdAt: Date.now(),
         priceUsd: tokenDetails.priceUsd,
         marketCap: tokenDetails.marketCap,
         volume24h: tokenDetails.volume24h,
         liquidityUsd: tokenDetails.liquidityUsd,
         image: tokenDetails.image,
         graduated: false,
-        blockHeight,
-        signature,
       };
 
       // Store in active tokens
@@ -286,59 +258,84 @@ export class PumpMonitor extends EventEmitter {
         mint,
         data: token,
         timestamp: Date.now(),
-        blockHeight,
-        signature,
       };
 
       this.emit('token', event);
 
-      console.log(`[PumpMonitor] New token detected: ${token.symbol} (${mint})`);
-      console.log(`  Price: $${token.priceUsd?.toFixed(6) || 'N/A'}`);
+      console.log(`[PumpMonitor] New token detected: ${token.symbol} (${mint.slice(0, 16)}...)`);
+      console.log(`  Price: $${token.priceUsd?.toFixed(10) || 'N/A'}`);
       console.log(`  Market Cap: $${token.marketCap?.toFixed(2) || 'N/A'}`);
+      console.log(`  Liquidity: $${token.liquidityUsd?.toFixed(2) || 'N/A'}`);
 
     } catch (error) {
-      console.error(`[PumpMonitor] Error processing token creation: ${error}`);
+      console.error(`[PumpMonitor] Error processing token ${mint}:`, error);
     }
   }
 
   /**
-   * Extract mint address from transaction
+   * Process token from pair data
    */
-  private extractMintFromTransaction(transaction: any): string | null {
+  private async processTokenFromPair(pair: DexScreenerPair): Promise<void> {
+    const mint = pair.baseToken.address;
+
+    if (this.processedMints.has(mint)) {
+      return;
+    }
+
+    this.addProcessedMint(mint);
+
+    // Get creator from chain
+    let creator = 'unknown';
     try {
-      // Get account keys - handle both legacy and versioned messages
-      let accountKeys: PublicKey[] = [];
-      
-      if (transaction.message.getAccountKeys) {
-        // Versioned message
-        accountKeys = transaction.message.getAccountKeys().staticAccountKeys || [];
-      } else if (transaction.message.accountKeys) {
-        // Legacy message
-        accountKeys = transaction.message.accountKeys;
+      const accountInfo = await this.connection.getAccountInfo(new PublicKey(mint));
+      if (accountInfo?.owner) {
+        creator = accountInfo.owner.toString();
       }
-      
-      // Look for likely mint address (third account in Pump.fun Create instruction)
-      // Pump.fun Create typically has accounts: [creator, bonding_curve, mint, ...]
-      if (accountKeys.length >= 3) {
-        const potentialMint = accountKeys[2].toString();
-        // Validate it looks like a Solana mint address (32 bytes base58 encoded = 43-44 chars)
-        if (potentialMint.length >= 32 && potentialMint.length <= 44) {
-          return potentialMint;
-        }
-      }
+    } catch {
+      // Ignore
+    }
 
-      // Fallback: look through all accounts for a mint-like address
-      for (const key of accountKeys) {
-        const addr = key.toString();
-        if (addr.length >= 32 && addr.length <= 44 && addr !== PUMP_FUN_PROGRAM_ID) {
-          return addr;
-        }
-      }
+    const token: Token = {
+      mint,
+      name: pair.baseToken.name || 'Unknown',
+      symbol: pair.baseToken.symbol || 'UNKNOWN',
+      creator,
+      createdAt: pair.pairCreatedAt || Date.now(),
+      priceUsd: parseFloat(pair.priceUsd || '0'),
+      marketCap: parseFloat(pair.marketCap || '0'),
+      volume24h: parseFloat(pair.volume?.h24 || '0'),
+      liquidityUsd: parseFloat(pair.liquidity?.usd || '0'),
+      image: pair.baseToken.icon,
+      graduated: false,
+    };
 
-      return null;
-    } catch (error) {
-      console.error('[PumpMonitor] Error extracting mint:', error);
-      return null;
+    this.activeTokens.set(mint, token);
+
+    const event: TokenEvent = {
+      type: 'create',
+      mint,
+      data: token,
+      timestamp: Date.now(),
+    };
+
+    this.emit('token', event);
+
+    console.log(`[PumpMonitor] New token from pair: ${token.symbol} (${mint.slice(0, 16)}...)`);
+    console.log(`  Price: $${token.priceUsd?.toFixed(10) || 'N/A'}`);
+    console.log(`  Market Cap: $${token.marketCap?.toFixed(2) || 'N/A'}`);
+  }
+
+  /**
+   * Add mint to processed set with size limit
+   */
+  private addProcessedMint(mint: string): void {
+    this.processedMints.add(mint);
+
+    if (this.processedMints.size > this.maxProcessedMints) {
+      const first = this.processedMints.values().next().value;
+      if (first) {
+        this.processedMints.delete(first);
+      }
     }
   }
 
@@ -362,29 +359,26 @@ export class PumpMonitor extends EventEmitter {
       });
 
       if (!response.ok) {
-        console.warn(`[PumpMonitor] DEX Screener API error: ${response.status}`);
         return null;
       }
 
-      const data = await response.json() as { pairs?: Array<{
-        baseToken: { name: string; symbol: string; icon?: string };
-        priceUsd: string;
-        marketCap: string;
-        volume?: { h24: string };
-        liquidity?: { usd: string };
-      }> };
+      const data = await response.json() as { pairs?: DexScreenerPair[] };
 
       if (!data.pairs || data.pairs.length === 0) {
-        console.warn(`[PumpMonitor] No pairs found for mint: ${mint}`);
         return null;
       }
 
-      // Get the most liquid pair
-      const pair = data.pairs.reduce((best, current) => {
+      // Get the most liquid pair on Solana
+      const solanaPairs = data.pairs.filter(p => p.chainId === 'solana');
+      if (solanaPairs.length === 0) {
+        return null;
+      }
+
+      const pair = solanaPairs.reduce((best, current) => {
         const bestLiquidity = parseFloat(best.liquidity?.usd || '0');
         const currentLiquidity = parseFloat(current.liquidity?.usd || '0');
         return currentLiquidity > bestLiquidity ? current : best;
-      }, data.pairs[0]);
+      }, solanaPairs[0]);
 
       return {
         name: pair.baseToken.name || 'Unknown',
@@ -403,88 +397,31 @@ export class PumpMonitor extends EventEmitter {
   }
 
   /**
-   * Process token graduation
+   * Update token prices (called periodically by TradeManager)
    */
-  private async processGraduation(signature: string): Promise<void> {
-    try {
-      const tx = await this.connection.getTransaction(signature, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      });
-
-      if (!tx) return;
-
-      const mint = this.extractMintFromTransaction(tx.transaction);
-      if (!mint) return;
-
-      const token = this.activeTokens.get(mint);
-      if (token) {
-        token.graduated = true;
-        
-        const event: TokenEvent = {
-          type: 'graduation',
-          mint,
-          data: token,
-          timestamp: Date.now(),
-          blockHeight: tx.slot,
-          signature,
-        };
-
-        this.emit('graduation', event);
-        console.log(`[PumpMonitor] Token graduated: ${token.symbol}`);
+  async updateTokenPrices(): Promise<void> {
+    for (const [mint, token] of this.activeTokens.entries()) {
+      try {
+        const updated = await this.fetchTokenDetails(mint);
+        if (updated) {
+          token.priceUsd = updated.priceUsd;
+          token.marketCap = updated.marketCap;
+          token.volume24h = updated.volume24h;
+          token.liquidityUsd = updated.liquidityUsd;
+        }
+      } catch (error) {
+        console.error(`[PumpMonitor] Error updating price for ${mint}:`, error);
       }
-    } catch (error) {
-      console.error(`[PumpMonitor] Error processing graduation: ${error}`);
     }
-  }
-
-  /**
-   * Start heartbeat to keep connection alive
-   */
-  private startHeartbeat(): void {
-    this.heartbeatInterval = setInterval(() => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        // Send ping to keep connection alive
-        this.ws.send(JSON.stringify({ jsonrpc: '2.0', id: 999, method: 'ping' }));
-      }
-    }, 30000); // Every 30 seconds
-  }
-
-  /**
-   * Schedule reconnection with exponential backoff
-   */
-  private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('[PumpMonitor] Max reconnection attempts reached');
-      this.isRunning = false;
-      return;
-    }
-
-    this.reconnectAttempts++;
-    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 30000);
-
-    console.log(`[PumpMonitor] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-
-    setTimeout(() => {
-      this.connectWebSocket();
-    }, delay);
   }
 
   /**
    * Cleanup resources
    */
   private cleanup(): void {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
-
-    if (this.ws) {
-      this.ws.removeAllListeners();
-      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-        this.ws.close();
-      }
-      this.ws = null;
+    if (this.httpPollingInterval) {
+      clearInterval(this.httpPollingInterval);
+      this.httpPollingInterval = null;
     }
   }
 

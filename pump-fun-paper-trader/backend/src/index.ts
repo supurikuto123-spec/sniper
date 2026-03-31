@@ -11,7 +11,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { TradeManager } from './tradeManager';
 import { PumpMonitor } from './pumpMonitor';
-import { PaperTradeConfig } from './types';
+import { PaperTradeConfig, HELIUS_RPC_URL } from './types';
 
 import path from 'path';
 
@@ -248,16 +248,20 @@ async function start() {
   console.log('╚══════════════════════════════════════════════════════════════╝');
   console.log('');
   console.log('Configuration:');
-  console.log(`  Helius RPC: wss://mainnet.helius-rpc.com (API key: ***)`);
+  console.log(`  Mode: HTTP Polling (DEX Screener API)`);
+  console.log(`  Helius RPC: ${HELIUS_RPC_URL.replace(/api-key=.*$/, 'api-key=***')}`);
   console.log(`  Program ID: 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P`);
   console.log(`  Initial Balance: 100 SOL (VIRTUAL)`);
   console.log('');
   console.log('Features:');
-  console.log('  ✓ Real-time blockchain log subscription');
+  console.log('  ✓ DEX Screener API polling (works with Free plan)');
   console.log('  ✓ NO fake data generation');
   console.log('  ✓ Real price data from DEX Screener API');
   console.log('  ✓ Virtual SOL balance tracking');
   console.log('  ✓ Auto take-profit / stop-loss');
+  console.log('');
+  console.log('Note: Helius Free plan does not support WebSocket.');
+  console.log('      Using DEX Screener HTTP polling instead (~8s interval).');
   console.log('');
 
   try {
