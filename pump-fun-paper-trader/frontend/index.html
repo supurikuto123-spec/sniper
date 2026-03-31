@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pump.fun Paper Trading Bot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        .profit { color: #22c55e; }
+        .loss { color: #ef4444; }
+        .card { background: #1f2937; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .live-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-6 max-w-6xl">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-6">
+            <div>
+                <h1 class="text-3xl font-bold">Pump.fun Paper Trading Bot</h1>
+                <p class="text-gray-400 mt-1">
+                    <span class="live-indicator"></span>
+                    リアルタイムモニタリング中
+                </p>
+            </div>
+            <div class="text-right">
+                <div class="text-sm text-gray-400">バーチャル残高</div>
+                <div class="text-2xl font-bold" id="balance">100.0000 SOL</div>
+                <div class="text-sm" id="balance-change"></div>
+            </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div class="card">
+                <div class="text-sm text-gray-400">総取引数</div>
+                <div class="text-xl font-bold" id="total-trades">0</div>
+            </div>
+            <div class="card">
+                <div class="text-sm text-gray-400">勝ち取引</div>
+                <div class="text-xl font-bold profit" id="winning-trades">0</div>
+            </div>
+            <div class="card">
+                <div class="text-sm text-gray-400">負け取引</div>
+                <div class="text-xl font-bold loss" id="losing-trades">0</div>
+            </div>
+            <div class="card">
+                <div class="text-sm text-gray-400">PnL</div>
+                <div class="text-xl font-bold" id="total-pnl">0 SOL</div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex gap-2 mb-6">
+            <button onclick="pauseTrading()" class="bg-yellow-600 hover:bg-yellow-700 px-4 py-2 rounded">一時停止</button>
+            <button onclick="resumeTrading()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">再開</button>
+            <button onclick="sellAll()" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded">全売却</button>
+            <button onclick="resetAll()" class="bg-gray-600 hover:bg-gray-700 px-4 py-2 rounded">リセット</button>
+        </div>
+
+        <!-- Open Positions -->
+        <div class="card">
+            <h2 class="text-xl font-bold mb-4">保有ポジション (<span id="position-count">0</span>)</h2>
+            <div id="positions-list" class="space-y-2">
+                <p class="text-gray-500">ポジションがありません</p>
+            </div>
+        </div>
+
+        <!-- Recent Tokens -->
+        <div class="card">
+            <h2 class="text-xl font-bold mb-4">最近検出したトークン</h2>
+            <div id="tokens-list" class="space-y-2">
+                <p class="text-gray-500">トークンが検出されていません</p>
+            </div>
+        </div>
+
+        <!-- Trade History -->
+        <div class="card">
+            <h2 class="text-xl font-bold mb-4">取引履歴</h2>
+            <div id="history-list" class="space-y-2">
+                <p class="text-gray-500">履歴がありません</p>
+            </div>
+        </div>
+
+        <!-- Log -->
+        <div class="card">
+            <h2 class="text-xl font-bold mb-4">ログ</h2>
+            <div id="log" class="h-48 overflow-y-auto text-sm font-mono bg-gray-800 p-2 rounded">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io('http://localhost:3000');
+        let positions = [];
+        let tokens = [];
+        let history = [];
+
+        function log(msg) {
+            const logEl = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logEl.innerHTML += `[${time}] ${msg}<br>`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function formatNumber(num, decimals = 4) {
+            return num ? num.toFixed(decimals) : '0';
+        }
+
+        function formatUsd(num) {
+            return num ? `$${num.toLocaleString()}` : '$0';
+        }
+
+        // Socket events
+        socket.on('connect', () => {
+            log('サーバーに接続しました');
+        });
+
+        socket.on('initial', (data) => {
+            updateBalance(data.balance);
+            updatePositions(data.positions);
+            updateTokens(data.tokens);
+            log(`初期データ受信: ${data.positions.length}ポジション, ${data.tokens.length}トークン`);
+        });
+
+        socket.on('token', (event) => {
+            log(`新規トークン検出: ${event.token.symbol}`);
+            tokens.unshift(event.token);
+            if (tokens.length > 20) tokens.pop();
+            updateTokens(tokens);
+        });
+
+        socket.on('position', (event) => {
+            if (event.type === 'open') {
+                log(`ポジション開設: ${event.position.symbol}`);
+            }
+            fetchPositions();
+        });
+
+        socket.on('trade', (event) => {
+            log(`取引完了: ${event.position.symbol} (${event.reason}) - PnL: ${formatNumber(event.position.pnlSol)} SOL`);
+            fetchHistory();
+            fetchStats();
+        });
+
+        socket.on('positions', (data) => {
+            updatePositions(data);
+        });
+
+        socket.on('stats', (data) => {
+            updateStats(data);
+        });
+
+        socket.on('disconnect', () => {
+            log('サーバーから切断しました');
+        });
+
+        // API calls
+        async function fetchPositions() {
+            try {
+                const res = await fetch('http://localhost:3000/api/positions');
+                const data = await res.json();
+                updatePositions(data);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function fetchHistory() {
+            try {
+                const res = await fetch('http://localhost:3000/api/history');
+                const data = await res.json();
+                updateHistory(data);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function fetchStats() {
+            try {
+                const res = await fetch('http://localhost:3000/api/stats');
+                const data = await res.json();
+                updateStats(data);
+                updateBalance({ current: data.currentBalance, initial: data.initialBalance });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function pauseTrading() {
+            await fetch('http://localhost:3000/api/pause', { method: 'POST' });
+            log('取引を一時停止しました');
+        }
+
+        async function resumeTrading() {
+            await fetch('http://localhost:3000/api/resume', { method: 'POST' });
+            log('取引を再開しました');
+        }
+
+        async function sellAll() {
+            const res = await fetch('http://localhost:3000/api/sell-all', { method: 'POST' });
+            const data = await res.json();
+            log(`${data.soldCount}ポジションを売却しました`);
+        }
+
+        async function resetAll() {
+            await fetch('http://localhost:3000/api/reset', { method: 'POST' });
+            log('すべてリセットしました');
+            location.reload();
+        }
+
+        // UI updates
+        function updateBalance(balance) {
+            document.getElementById('balance').textContent = `${formatNumber(balance.current)} SOL`;
+            const change = balance.current - balance.initial;
+            const changeEl = document.getElementById('balance-change');
+            changeEl.textContent = `${change >= 0 ? '+' : ''}${formatNumber(change)} SOL`;
+            changeEl.className = change >= 0 ? 'text-sm profit' : 'text-sm loss';
+        }
+
+        function updateStats(stats) {
+            document.getElementById('total-trades').textContent = stats.totalTrades;
+            document.getElementById('winning-trades').textContent = stats.winningTrades;
+            document.getElementById('losing-trades').textContent = stats.losingTrades;
+            const pnlEl = document.getElementById('total-pnl');
+            pnlEl.textContent = `${formatNumber(stats.totalPnlSol)} SOL`;
+            pnlEl.className = `text-xl font-bold ${stats.totalPnlSol >= 0 ? 'profit' : 'loss'}`;
+        }
+
+        function updatePositions(data) {
+            positions = data;
+            document.getElementById('position-count').textContent = positions.length;
+            const list = document.getElementById('positions-list');
+            
+            if (positions.length === 0) {
+                list.innerHTML = '<p class="text-gray-500">ポジションがありません</p>';
+                return;
+            }
+
+            list.innerHTML = positions.map(p => `
+                <div class="flex justify-between items-center bg-gray-800 p-3 rounded">
+                    <div>
+                        <div class="font-bold">${p.symbol}</div>
+                        <div class="text-sm text-gray-400">Entry: ${formatUsd(p.entryPriceUsd)}</div>
+                        <div class="text-sm text-gray-400">Current: ${formatUsd(p.currentPriceUsd)}</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-lg font-bold ${p.pnlPercent >= 0 ? 'profit' : 'loss'}">
+                            ${p.pnlPercent >= 0 ? '+' : ''}${formatNumber(p.pnlPercent, 2)}%
+                        </div>
+                        <div class="text-sm ${p.pnlSol >= 0 ? 'profit' : 'loss'}">
+                            ${p.pnlSol >= 0 ? '+' : ''}${formatNumber(p.pnlSol)} SOL
+                        </div>
+                        <button onclick="sellPosition('${p.mint}')" class="mt-1 bg-red-600 hover:bg-red-700 px-3 py-1 rounded text-sm">
+                            売却
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function sellPosition(mint) {
+            await fetch(`http://localhost:3000/api/sell/${mint}`, { method: 'POST' });
+            log(`手動売却: ${mint}`);
+            fetchPositions();
+        }
+
+        function updateTokens(data) {
+            tokens = data;
+            const list = document.getElementById('tokens-list');
+            
+            if (tokens.length === 0) {
+                list.innerHTML = '<p class="text-gray-500">トークンが検出されていません</p>';
+                return;
+            }
+
+            list.innerHTML = tokens.slice(0, 10).map(t => `
+                <div class="flex justify-between items-center bg-gray-800 p-2 rounded text-sm">
+                    <div>
+                        <span class="font-bold">${t.symbol}</span>
+                        <span class="text-gray-400"> - ${t.name}</span>
+                    </div>
+                    <div class="text-right">
+                        <div>${formatUsd(t.marketCap)}</div>
+                        <div class="text-gray-400">${formatUsd(t.priceUsd, 6)}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateHistory(data) {
+            history = data;
+            const list = document.getElementById('history-list');
+            
+            if (history.length === 0) {
+                list.innerHTML = '<p class="text-gray-500">履歴がありません</p>';
+                return;
+            }
+
+            list.innerHTML = history.slice(0, 10).map(h => `
+                <div class="flex justify-between items-center bg-gray-800 p-2 rounded text-sm">
+                    <div>
+                        <span class="font-bold">${h.symbol}</span>
+                        <span class="text-gray-400"> SOLD</span>
+                    </div>
+                    <div class="text-right ${h.pnlPercent >= 0 ? 'profit' : 'loss'}">
+                        ${h.pnlPercent >= 0 ? '+' : ''}${formatNumber(h.pnlPercent, 2)}%
+                        (${h.pnlSol >= 0 ? '+' : ''}${formatNumber(h.pnlSol)} SOL)
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Initial load
+        fetchPositions();
+        fetchHistory();
+        fetchStats();
+
+        // Refresh every 5 seconds
+        setInterval(() => {
+            fetchPositions();
+            fetchStats();
+        }, 5000);
+    </script>
+</body>
+</html>

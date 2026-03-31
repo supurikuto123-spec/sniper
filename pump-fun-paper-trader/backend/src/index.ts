@@ -13,6 +13,8 @@ import { TradeManager } from './tradeManager';
 import { PumpMonitor } from './pumpMonitor';
 import { PaperTradeConfig } from './types';
 
+import path from 'path';
+
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -23,10 +25,19 @@ const io = new Server(httpServer, {
 });
 
 const PORT = process.env.PORT || 3000;
+const FRONTEND_DIR = path.join(__dirname, '../../frontend');
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Serve frontend static files
+app.use(express.static(FRONTEND_DIR));
+
+// Serve index.html at root
+app.get('/', (req: Request, res: Response) => {
+  res.sendFile(path.join(FRONTEND_DIR, 'index.html'));
+});
 
 // Initialize managers
 const tradeManager = new TradeManager();
