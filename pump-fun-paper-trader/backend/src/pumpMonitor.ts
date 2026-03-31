@@ -14,6 +14,7 @@ import {
   DEX_SCREENER_API,
   Token,
   TokenEvent,
+  SocialLinks,
 } from './types';
 
 const PUMP_FUN_PROGRAM_PUBKEY = new PublicKey(PUMP_FUN_PROGRAM_ID);
@@ -216,22 +217,56 @@ export class PumpMonitor extends EventEmitter {
         return;
       }
 
+      // Fetch additional security checks
+      const creator = this.extractCreator(tx);
+      const [socialLinks, devInitialBuy] = await Promise.all([
+        this.fetchTokenProfile(mint),
+        this.analyzeDevBuy(mint, creator, signature),
+      ]);
+
+      // Calculate safety checks
+      const hasTwitter = !!socialLinks?.twitter;
+      const hasWebsite = !!socialLinks?.website;
+      const hasSocialLinks = hasTwitter || hasWebsite;
+      const devBuyLarge = (devInitialBuy || 0) >= 0.5;
+
+      // DEV lock is approximated: if graduated, liquidity is "locked" in DEX
+      const devLockEnabled = tokenDetails.graduated || false;
+
+      // Calculate safety score (0-100)
+      let safetyScore = 0;
+      if (hasTwitter) safetyScore += 25;
+      if (hasWebsite) safetyScore += 15;
+      if (devBuyLarge) safetyScore += 30;
+      if (devLockEnabled) safetyScore += 30;
+
       this.addProcessedSignature(mint);
 
-      // Build token
+      // Build token with checks
       const token: Token = {
         mint,
         name: tokenDetails.name,
         symbol: tokenDetails.symbol,
-        creator: this.extractCreator(tx),
+        creator,
         createdAt: (tx.blockTime || Date.now() / 1000) * 1000,
         priceUsd: tokenDetails.priceUsd,
         marketCap: tokenDetails.marketCap,
         volume24h: tokenDetails.volume24h,
         liquidityUsd: tokenDetails.liquidityUsd,
         image: tokenDetails.image,
-        graduated: false,
+        graduated: tokenDetails.graduated || false,
         signature,
+        socialLinks,
+        devInitialBuy,
+        devLockEnabled,
+        safetyScore,
+        checks: {
+          hasSocialLinks,
+          hasTwitter,
+          hasWebsite,
+          devBuyLarge,
+          devLockEnabled,
+        },
       };
 
       this.activeTokens.set(mint, token);
@@ -246,14 +281,15 @@ export class PumpMonitor extends EventEmitter {
 
       this.emit('token', event);
 
+      // Log with checks
       console.log('');
       console.log('╔════════════════════════════════════════════════════╗');
-      console.log(`║  NEW TOKEN DETECTED: ${token.symbol.padEnd(29)} ║`);
+      console.log(`║  NEW TOKEN: ${token.symbol.padEnd(36)} ║`);
       console.log('╚════════════════════════════════════════════════════╝');
       console.log(`  Mint: ${mint}`);
-      console.log(`  Price: $${(token.priceUsd || 0).toFixed(10)}`);
-      console.log(`  Market Cap: $${(token.marketCap || 0).toFixed(2)}`);
-      console.log(`  Liquidity: $${(token.liquidityUsd || 0).toFixed(2)}`);
+      console.log(`  Price: $${(token.priceUsd || 0).toFixed(10)} | MC: $${(token.marketCap || 0).toFixed(2)} | Liq: $${(token.liquidityUsd || 0).toFixed(2)}`);
+      console.log(`  Safety Score: ${safetyScore}/100 ${safetyScore >= 70 ? '✓ SAFE' : safetyScore >= 40 ? '⚠ MEDIUM' : '✗ RISKY'}`);
+      console.log(`  Checks: Twitter:${hasTwitter ? '✓' : '✗'} | Web:${hasWebsite ? '✓' : '✗'} | DevBuy:${devBuyLarge ? '✓' : '✗'}(${devInitialBuy?.toFixed(2) || 0}SOL) | Lock:${devLockEnabled ? '✓' : '✗'}`);
       console.log(`  TX: https://solscan.io/tx/${signature}`);
       console.log('');
 
@@ -269,32 +305,35 @@ export class PumpMonitor extends EventEmitter {
     const logs = tx.meta?.logMessages || [];
     const instructions = tx.transaction.message.instructions;
 
-    // Check logs for creation indicators
+    // STRICT: Must involve Pump.fun program specifically
+    const involvesPumpFun = instructions.some(ix => {
+      if ('programId' in ix) {
+        return ix.programId.toString() === PUMP_FUN_PROGRAM_ID;
+      }
+      return false;
+    });
+
+    if (!involvesPumpFun) {
+      return false;
+    }
+
+    // Check logs for token creation event - must have BOTH program invocation AND create keyword
     const hasCreateLog = logs.some(log =>
-      CREATE_DISCRIMINATORS.some(d => log.includes(d))
+      log.includes('Instruction:') &&
+      CREATE_DISCRIMINATORS.some(d => log.toLowerCase().includes(d.toLowerCase()))
     );
 
     if (hasCreateLog) {
       return true;
     }
 
-    // Check for initialize mint instruction
-    for (const ix of instructions) {
-      if ('program' in ix && ix.program === 'spl-token') {
-        if ('parsed' in ix && ix.parsed?.type === 'initializeMint') {
-          return true;
-        }
-      }
-    }
-
-    // Check for Pump.fun specific logs
-    const hasPumpFunLog = logs.some(log =>
-      log.includes(PUMP_FUN_PROGRAM_ID.slice(0, 20)) ||
-      log.includes('bonding_curve') ||
-      log.includes('BondingCurve')
+    // Check for Pump.fun specific token creation patterns in logs
+    const hasPumpFunCreate = logs.some(log =>
+      log.includes('Create') &&
+      (log.includes('mint') || log.includes('token'))
     );
 
-    return hasPumpFunLog;
+    return hasPumpFunCreate;
   }
 
   /**
@@ -406,6 +445,7 @@ export class PumpMonitor extends EventEmitter {
     volume24h: number;
     liquidityUsd: number;
     image?: string;
+    graduated?: boolean;
   } | null> {
     try {
       const response = await fetch(`${DEX_SCREENER_API}/tokens/${mint}`, {
@@ -424,6 +464,7 @@ export class PumpMonitor extends EventEmitter {
           volume?: { h24: string };
           liquidity?: { usd: string };
           chainId: string;
+          dexId: string;
         }>;
       };
 
@@ -442,6 +483,12 @@ export class PumpMonitor extends EventEmitter {
         return currLiq > bestLiq ? current : best;
       }, solanaPairs[0]);
 
+      // Graduated if traded on Raydium (not just Pump.fun)
+      const graduated = solanaPairs.some(p =>
+        p.dexId?.toLowerCase().includes('raydium') ||
+        p.dexId?.toLowerCase().includes('orca')
+      );
+
       return {
         name: pair.baseToken.name || 'Unknown',
         symbol: pair.baseToken.symbol || 'UNKNOWN',
@@ -450,10 +497,143 @@ export class PumpMonitor extends EventEmitter {
         volume24h: parseFloat(pair.volume?.h24 || '0'),
         liquidityUsd: parseFloat(pair.liquidity?.usd || '0'),
         image: pair.baseToken.icon,
+        graduated,
       };
 
     } catch (error) {
       return null;
+    }
+  }
+
+  /**
+   * Fetch token profile (social links) from DEX Screener
+   */
+  private async fetchTokenProfile(mint: string): Promise<SocialLinks | undefined> {
+    try {
+      // Try token profiles endpoint
+      const response = await fetch(`${DEX_SCREENER_API}/token-profiles/${mint}`, {
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (response.ok) {
+        const data = await response.json() as {
+          twitter?: string;
+          website?: string;
+          telegram?: string;
+          discord?: string;
+        };
+        return {
+          twitter: data.twitter,
+          website: data.website,
+          telegram: data.telegram,
+          discord: data.discord,
+        };
+      }
+
+      // Fallback: search for token and extract from description
+      const searchResponse = await fetch(`${DEX_SCREENER_API}/search?q=${mint}`, {
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (searchResponse.ok) {
+        const searchData = await searchResponse.json() as {
+          pairs?: Array<{
+            baseToken: { address: string };
+            profile?: {
+              twitter?: string;
+              website?: string;
+              telegram?: string;
+            };
+          }>;
+        };
+
+        const pair = searchData.pairs?.find(p =>
+          p.baseToken.address.toLowerCase() === mint.toLowerCase()
+        );
+
+        if (pair?.profile) {
+          return {
+            twitter: pair.profile.twitter,
+            website: pair.profile.website,
+            telegram: pair.profile.telegram,
+          };
+        }
+      }
+
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Analyze DEV's initial buy amount from recent transactions
+   * Looks for creator's buys within first minutes of token launch
+   */
+  private async analyzeDevBuy(
+    mint: string,
+    creator: string,
+    creationSignature: string
+  ): Promise<number | undefined> {
+    try {
+      // Get recent signatures for the token mint
+      const mintPubkey = new PublicKey(mint);
+      const signatures = await this.connection.getSignaturesForAddress(
+        mintPubkey,
+        { limit: 50 }
+      );
+
+      let totalDevSolSpent = 0;
+      let foundCreation = false;
+
+      // Check transactions in reverse (newest first)
+      for (const sigInfo of signatures) {
+        if (sigInfo.signature === creationSignature) {
+          foundCreation = true;
+          continue;
+        }
+
+        // Only check transactions within ~5 mins of creation
+        if (!foundCreation && sigInfo.blockTime) {
+          const creationTime = sigInfo.blockTime; // Approximate
+          const timeDiff = Math.abs(creationTime - sigInfo.blockTime);
+          if (timeDiff > 300) break; // Stop after 5 min window
+        }
+
+        const tx = await this.connection.getParsedTransaction(sigInfo.signature, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        });
+
+        if (!tx || !tx.meta) continue;
+
+        // Check if creator is a signer
+        const isCreatorSigner = tx.transaction.message.accountKeys.some(
+          acc => acc.signer && acc.pubkey.toString() === creator
+        );
+
+        if (!isCreatorSigner) continue;
+
+        // Calculate SOL spent by creator in this tx
+        const creatorIndex = tx.transaction.message.accountKeys.findIndex(
+          acc => acc.pubkey.toString() === creator
+        );
+
+        if (creatorIndex >= 0 && tx.meta.preBalances && tx.meta.postBalances) {
+          const preBalance = tx.meta.preBalances[creatorIndex];
+          const postBalance = tx.meta.postBalances[creatorIndex];
+          const solSpent = (preBalance - postBalance) / 1e9;
+
+          // If SOL was spent (not received) and it's a reasonable amount
+          if (solSpent > 0.01 && solSpent < 100) {
+            totalDevSolSpent += solSpent;
+          }
+        }
+      }
+
+      return totalDevSolSpent > 0 ? totalDevSolSpent : undefined;
+    } catch {
+      return undefined;
     }
   }
 

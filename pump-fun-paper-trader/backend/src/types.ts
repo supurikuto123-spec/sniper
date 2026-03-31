@@ -15,6 +15,20 @@ export const HELIUS_WS_URL = 'wss://mainnet.helius-rpc.com/?api-key=f8266582-4bd
 /** DEX Screener API base URL (price queries only) */
 export const DEX_SCREENER_API = 'https://api.dexscreener.com/latest/dex';
 
+/** Social links from token profile */
+export interface SocialLinks {
+  /** Twitter/X URL */
+  twitter?: string;
+  /** Website URL */
+  website?: string;
+  /** Telegram URL */
+  telegram?: string;
+  /** Discord URL */
+  discord?: string;
+  /** Medium URL */
+  medium?: string;
+}
+
 /** Token information from real blockchain data */
 export interface Token {
   /** Token mint address (verified on-chain) */
@@ -47,6 +61,22 @@ export interface Token {
   blockHeight?: number;
   /** Transaction signature that created the token */
   signature?: string;
+  /** Social links (Twitter, Website, etc.) */
+  socialLinks?: SocialLinks;
+  /** DEV initial buy amount in SOL */
+  devInitialBuy?: number;
+  /** Whether DEV has locked tokens (via Pump.fun or DEX) */
+  devLockEnabled?: boolean;
+  /** Safety score (0-100) based on checks */
+  safetyScore?: number;
+  /** Individual check results */
+  checks?: {
+    hasSocialLinks: boolean;
+    hasTwitter: boolean;
+    hasWebsite: boolean;
+    devBuyLarge: boolean;
+    devLockEnabled: boolean;
+  };
 }
 
 /** Price history point - records real price movements */

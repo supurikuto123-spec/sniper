@@ -22,6 +22,26 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
+        .check-pass { color: #22c55e; }
+        .check-fail { color: #ef4444; }
+        .token-card {
+            background: #374151;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-left: 4px solid #6b7280;
+        }
+        .token-card.safe { border-left-color: #22c55e; }
+        .token-card.medium { border-left-color: #f59e0b; }
+        .token-card.risky { border-left-color: #ef4444; }
+        .safety-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
@@ -34,6 +54,7 @@
                     <span class="live-indicator"></span>
                     リアルタイムモニタリング中
                 </p>
+                <p class="text-xs text-gray-500 mt-1">Safety Checks: SNS Links | Dev Buy ≥0.5 SOL | Dev Lock</p>
             </div>
             <div class="text-right">
                 <div class="text-sm text-gray-400">バーチャル残高</div>
@@ -78,9 +99,9 @@
             </div>
         </div>
 
-        <!-- Recent Tokens -->
+        <!-- Recent Tokens with Safety Checks -->
         <div class="card">
-            <h2 class="text-xl font-bold mb-4">最近検出したトークン</h2>
+            <h2 class="text-xl font-bold mb-4">最近検出したトークン (Safety Score付き)</h2>
             <div id="tokens-list" class="space-y-2">
                 <p class="text-gray-500">トークンが検出されていません</p>
             </div>
@@ -120,7 +141,22 @@
         }
 
         function formatUsd(num) {
-            return num ? `$${num.toLocaleString()}` : '$0';
+            if (!num || num === 0) return '$0';
+            if (num >= 1000000) return `$${(num/1000000).toFixed(2)}M`;
+            if (num >= 1000) return `$${(num/1000).toFixed(2)}K`;
+            return `$${num.toFixed(2)}`;
+        }
+
+        function getSafetyClass(score) {
+            if (score >= 70) return 'safe';
+            if (score >= 40) return 'medium';
+            return 'risky';
+        }
+
+        function getSafetyBadge(score) {
+            if (score >= 70) return '<span class="safety-badge bg-green-900 text-green-300">SAFE</span>';
+            if (score >= 40) return '<span class="safety-badge bg-yellow-900 text-yellow-300">MEDIUM</span>';
+            return '<span class="safety-badge bg-red-900 text-red-300">RISKY</span>';
         }
 
         // Socket events
@@ -136,21 +172,39 @@
         });
 
         socket.on('token', (event) => {
-            log(`新規トークン検出: ${event.token.symbol}`);
-            tokens.unshift(event.token);
+            // Handle both event.data and direct token properties
+            const token = event.data || event.token || event;
+            const symbol = token.symbol || 'UNKNOWN';
+            const safetyScore = token.safetyScore || 0;
+            const checks = token.checks || {};
+            
+            log(`新規トークン検出: ${symbol} (Safety: ${safetyScore})`);
+            
+            // Add detailed log about checks
+            const twitter = checks.hasTwitter ? '✓' : '✗';
+            const website = checks.hasWebsite ? '✓' : '✗';
+            const devBuy = checks.devBuyLarge ? '✓' : '✗';
+            const devLock = checks.devLockEnabled ? '✓' : '✗';
+            log(`  Checks - Twitter:${twitter} Web:${website} DevBuy:${devBuy} Lock:${devLock}`);
+            
+            tokens.unshift(token);
             if (tokens.length > 20) tokens.pop();
             updateTokens(tokens);
         });
 
         socket.on('position', (event) => {
             if (event.type === 'open') {
-                log(`ポジション開設: ${event.position.symbol}`);
+                const pos = event.position || event.data;
+                log(`ポジション開設: ${pos?.symbol || 'Unknown'}`);
             }
             fetchPositions();
         });
 
         socket.on('trade', (event) => {
-            log(`取引完了: ${event.position.symbol} (${event.reason}) - PnL: ${formatNumber(event.position.pnlSol)} SOL`);
+            const pos = event.position || event.data;
+            const reason = event.reason || 'unknown';
+            const pnl = pos?.pnlSol || 0;
+            log(`取引完了: ${pos?.symbol || 'Unknown'} (${reason}) - PnL: ${formatNumber(pnl)} SOL`);
             fetchHistory();
             fetchStats();
         });
@@ -231,16 +285,17 @@
         }
 
         function updateStats(stats) {
-            document.getElementById('total-trades').textContent = stats.totalTrades;
-            document.getElementById('winning-trades').textContent = stats.winningTrades;
-            document.getElementById('losing-trades').textContent = stats.losingTrades;
+            document.getElementById('total-trades').textContent = stats.totalTrades || 0;
+            document.getElementById('winning-trades').textContent = stats.winningTrades || 0;
+            document.getElementById('losing-trades').textContent = stats.losingTrades || 0;
             const pnlEl = document.getElementById('total-pnl');
-            pnlEl.textContent = `${formatNumber(stats.totalPnlSol)} SOL`;
-            pnlEl.className = `text-xl font-bold ${stats.totalPnlSol >= 0 ? 'profit' : 'loss'}`;
+            const pnl = stats.totalPnlSol || 0;
+            pnlEl.textContent = `${formatNumber(pnl)} SOL`;
+            pnlEl.className = `text-xl font-bold ${pnl >= 0 ? 'profit' : 'loss'}`;
         }
 
         function updatePositions(data) {
-            positions = data;
+            positions = data || [];
             document.getElementById('position-count').textContent = positions.length;
             const list = document.getElementById('positions-list');
             
@@ -273,12 +328,12 @@
 
         async function sellPosition(mint) {
             await fetch(`http://localhost:3000/api/sell/${mint}`, { method: 'POST' });
-            log(`手動売却: ${mint}`);
+            log(`手動売却: ${mint.slice(0, 16)}...`);
             fetchPositions();
         }
 
         function updateTokens(data) {
-            tokens = data;
+            tokens = data || [];
             const list = document.getElementById('tokens-list');
             
             if (tokens.length === 0) {
@@ -286,22 +341,50 @@
                 return;
             }
 
-            list.innerHTML = tokens.slice(0, 10).map(t => `
-                <div class="flex justify-between items-center bg-gray-800 p-2 rounded text-sm">
-                    <div>
-                        <span class="font-bold">${t.symbol}</span>
-                        <span class="text-gray-400"> - ${t.name}</span>
+            list.innerHTML = tokens.slice(0, 10).map(t => {
+                const safetyScore = t.safetyScore || 0;
+                const checks = t.checks || {};
+                const safetyClass = getSafetyClass(safetyScore);
+                const safetyBadge = getSafetyBadge(safetyScore);
+                
+                return `
+                <div class="token-card ${safetyClass}">
+                    <div class="flex justify-between items-start mb-2">
+                        <div>
+                            <span class="font-bold text-lg">${t.symbol}</span>
+                            <span class="text-gray-400 text-sm"> - ${t.name}</span>
+                        </div>
+                        <div>${safetyBadge}</div>
                     </div>
-                    <div class="text-right">
-                        <div>${formatUsd(t.marketCap)}</div>
-                        <div class="text-gray-400">${formatUsd(t.priceUsd, 6)}</div>
+                    <div class="grid grid-cols-2 gap-2 text-sm mb-2">
+                        <div>Price: ${formatUsd(t.priceUsd)}</div>
+                        <div>MC: ${formatUsd(t.marketCap)}</div>
+                    </div>
+                    <div class="flex gap-3 text-xs">
+                        <span class="${checks.hasTwitter ? 'check-pass' : 'check-fail'}">
+                            Twitter: ${checks.hasTwitter ? '✓' : '✗'}
+                        </span>
+                        <span class="${checks.hasWebsite ? 'check-pass' : 'check-fail'}">
+                            Web: ${checks.hasWebsite ? '✓' : '✗'}
+                        </span>
+                        <span class="${checks.devBuyLarge ? 'check-pass' : 'check-fail'}">
+                            DevBuy≥0.5: ${checks.devBuyLarge ? '✓' : '✗'}
+                            ${t.devInitialBuy ? `(${t.devInitialBuy.toFixed(2)}SOL)` : ''}
+                        </span>
+                        <span class="${checks.devLockEnabled ? 'check-pass' : 'check-fail'}">
+                            Lock: ${checks.devLockEnabled ? '✓' : '✗'}
+                        </span>
+                    </div>
+                    <div class="mt-2 text-xs text-gray-500">
+                        Mint: ${t.mint?.slice(0, 20)}... | 
+                        <a href="https://solscan.io/tx/${t.signature}" target="_blank" class="text-blue-400 hover:text-blue-300">View TX</a>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         function updateHistory(data) {
-            history = data;
+            history = data || [];
             const list = document.getElementById('history-list');
             
             if (history.length === 0) {
@@ -313,7 +396,7 @@
                 <div class="flex justify-between items-center bg-gray-800 p-2 rounded text-sm">
                     <div>
                         <span class="font-bold">${h.symbol}</span>
-                        <span class="text-gray-400"> SOLD</span>
+                        <span class="text-gray-400"> SOLD (${h.exitReason || 'manual'})</span>
                     </div>
                     <div class="text-right ${h.pnlPercent >= 0 ? 'profit' : 'loss'}">
                         ${h.pnlPercent >= 0 ? '+' : ''}${formatNumber(h.pnlPercent, 2)}%
