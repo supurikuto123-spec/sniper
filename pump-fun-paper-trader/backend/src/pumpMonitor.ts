@@ -148,7 +148,17 @@ export class PumpMonitor extends EventEmitter {
    * Process log notification from Helius
    */
   private async processLogNotification(notification: HeliusLogNotification): Promise<void> {
+    // Validate notification structure
+    if (!notification?.result) {
+      return;
+    }
+
     const { signature, logs, err, blockHeight } = notification.result;
+
+    // Skip if missing required fields
+    if (!signature || !logs || !Array.isArray(logs)) {
+      return;
+    }
 
     // Skip failed transactions
     if (err) {
