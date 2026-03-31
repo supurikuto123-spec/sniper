@@ -137,6 +137,11 @@ export class PumpMonitor extends EventEmitter {
       // Handle log notifications
       if (message.method === 'logsNotification' && message.params) {
         const notification = message.params as HeliusLogNotification;
+        // Debug: Print received logs
+        if (notification.result?.logs) {
+          console.log(`[DEBUG] Received logs for ${notification.result.signature?.slice(0, 16)}...`, 
+            notification.result.logs.slice(0, 3));
+        }
         this.processLogNotification(notification);
       }
     } catch (error) {
