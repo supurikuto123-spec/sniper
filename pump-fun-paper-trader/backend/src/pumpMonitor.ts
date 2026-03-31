@@ -132,6 +132,8 @@ export class PumpMonitor extends EventEmitter {
         headers: { 'Accept': 'application/json' },
       });
 
+      console.log(`[DEBUG] token-profiles API status: ${profilesResponse.status}`);
+
       if (profilesResponse.ok) {
         const profiles = await profilesResponse.json() as Array<{
           url: string;
@@ -140,11 +142,14 @@ export class PumpMonitor extends EventEmitter {
           icon?: string;
         }>;
 
+        console.log(`[DEBUG] token-profiles returned ${profiles.length} tokens, ${profiles.filter(p => p.chainId === 'solana').length} Solana`);
+
         // Filter for Solana tokens only
         const solanaTokens = profiles.filter(p => p.chainId === 'solana');
 
         for (const profile of solanaTokens.slice(0, 5)) {
           if (!this.processedMints.has(profile.tokenAddress)) {
+            console.log(`[DEBUG] New Solana token from profiles: ${profile.tokenAddress.slice(0, 16)}...`);
             await this.processNewToken(profile.tokenAddress, profile.icon);
           }
         }
@@ -155,8 +160,12 @@ export class PumpMonitor extends EventEmitter {
         headers: { 'Accept': 'application/json' },
       });
 
+      console.log(`[DEBUG] token-boosts API status: ${boostedResponse.status}`);
+
       if (boostedResponse.ok) {
         const boosted = await boostedResponse.json() as DexScreenerBoosted[];
+
+        console.log(`[DEBUG] token-boosts returned ${boosted.length} tokens`);
 
         // Filter for Solana/Pump.fun tokens from last 10 minutes
         const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
@@ -166,8 +175,11 @@ export class PumpMonitor extends EventEmitter {
           b.pairCreatedAt > tenMinutesAgo
         );
 
+        console.log(`[DEBUG] Recent Solana boosted tokens (<10min): ${recentTokens.length}`);
+
         for (const token of recentTokens.slice(0, 5)) {
           if (!this.processedMints.has(token.baseToken.address)) {
+            console.log(`[DEBUG] New boosted token: ${token.baseToken.symbol} (${token.baseToken.address.slice(0, 16)}...)`);
             await this.processNewToken(
               token.baseToken.address,
               token.baseToken.icon
@@ -182,19 +194,28 @@ export class PumpMonitor extends EventEmitter {
         { headers: { 'Accept': 'application/json' } }
       );
 
+      console.log(`[DEBUG] search API status: ${searchResponse.status}`);
+
       if (searchResponse.ok) {
         const searchData = await searchResponse.json() as { pairs?: DexScreenerPair[] };
+        console.log(`[DEBUG] search returned ${searchData.pairs?.length || 0} pairs`);
         if (searchData.pairs) {
           const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
 
+          let newTokensFromSearch = 0;
           for (const pair of searchData.pairs) {
             // Check if this is a Pump.fun token (created recently)
             if (pair.pairCreatedAt && pair.pairCreatedAt > fiveMinutesAgo) {
               const mint = pair.baseToken.address;
               if (!this.processedMints.has(mint)) {
+                console.log(`[DEBUG] New token from search: ${pair.baseToken.symbol} (<5min old)`);
                 await this.processTokenFromPair(pair);
+                newTokensFromSearch++;
               }
             }
+          }
+          if (newTokensFromSearch === 0) {
+            console.log(`[DEBUG] No new tokens from search (<5min old)`);
           }
         }
       }
