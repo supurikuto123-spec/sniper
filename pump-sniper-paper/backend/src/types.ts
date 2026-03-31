@@ -8,6 +8,9 @@ export interface Token {
   metadata?: {
     image?: string;
     description?: string;
+    priceUsd?: string;
+    marketCap?: number;
+    volume24h?: number;
   };
 }
 

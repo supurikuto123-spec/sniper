@@ -3,7 +3,7 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { TradeManager } from './tradeManager';
-import { PumpSimulator } from './pumpSimulator';
+import { PumpMonitor } from './pumpMonitor';
 import { Token, TokenEvent, TradePosition, PaperTradeConfig } from './types';
 
 const app = express();
@@ -23,7 +23,7 @@ app.use(express.json());
 
 // インスタンス作成
 const tradeManager = new TradeManager();
-const simulator = new PumpSimulator();
+const monitor = new PumpMonitor(); // 本物のPump.fun監視
 
 // ===== HTTP APIエンドポイント =====
 
@@ -82,9 +82,9 @@ app.get('/api/total-balance', (req, res) => {
   });
 });
 
-// アクティブトークン（シミュレーター）
+// アクティブトークン（本物のPump.funデータ）
 app.get('/api/tokens', (req, res) => {
-  const tokens = simulator.getActiveTokens();
+  const tokens = monitor.getActiveTokens();
   res.json({
     success: true,
     count: tokens.length,
@@ -290,7 +290,7 @@ io.on('connection', (socket) => {
     balance: tradeManager.getBalance(),
     totalBalance,
     config: tradeManager.getConfig(),
-    simulatorStatus: simulator.isActive(),
+    monitorStatus: monitor.isActive(),
     paused: tradeManager.isTradingPaused()
   });
 
@@ -299,10 +299,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// ===== Pump.funシミュレーター連携 =====
+// ===== Pump.funリアルタイム監視連携 =====
 
-// 新規トークン検出時（非同期対応）
-simulator.on('token', async (event: TokenEvent) => {
+// 新規トークン検出時（本物のPump.funデータ - 非同期対応）
+monitor.on('token', async (event: TokenEvent) => {
   const token = event.data as Token;
   
   // ペーパートレードで購入（遅延シミュレーション込み）
@@ -317,7 +317,7 @@ simulator.on('token', async (event: TokenEvent) => {
     io.emit('token_created', {
       token,
       position,
-      message: `🎯 SNIPED: ${token.name} at rank #${position.buyRank}!`
+      message: `🎯 SNIPED: ${token.name} (REAL PUMP.FUN DATA)`
     });
   } else {
     io.emit('token_created', {
@@ -336,38 +336,27 @@ simulator.on('token', async (event: TokenEvent) => {
   });
 });
 
-// 取引発生時（価格更新・非同期対応）
-simulator.on('trade', async (event: TokenEvent) => {
+// Real blockchain trade events (from actual Pump.fun transactions)
+monitor.on('trade', async (event: TokenEvent) => {
   const { solAmount, isBuy, tokenName, tokenSymbol } = event.data;
-  
-  // ポジションの価格更新（自動売却・強制売却チェック込み）
+
+  // Update position price (with auto-sell checks)
   const position = await tradeManager.updatePrice(event.mint, solAmount, isBuy);
-  
+
   if (position) {
-    // 売却済みチェック
+    // Check if sold
     if (position.sold) {
-      const reason = position.pnlPercent >= 55 ? 'take_profit' : 
+      const reason = position.pnlPercent >= 55 ? 'take_profit' :
                      position.pnlPercent <= -30 ? 'stop_loss' : 'force_sell';
       const emoji = reason === 'take_profit' ? '💰' : reason === 'stop_loss' ? '🛑' : '⏰';
       const label = reason === 'take_profit' ? 'TP' : reason === 'stop_loss' ? 'SL' : 'FORCE';
       console.log(`${emoji} [PAPER] AUTO-SOLD ${tokenSymbol} [${label}] ${position.pnlPercent.toFixed(2)}%`);
-      
+
       io.emit('position_closed', position);
-    } else {
-      // 定期的に更新（過度な更新を避けるため条件付き）
-      if (Math.random() > 0.7) {
-        io.emit('position_update', position);
-        
-        // 大きな変動があった場合のみ詳細ログ
-        if (Math.abs(position.pnlPercent) > 20) {
-          const emoji = position.pnlPercent > 0 ? '📈' : '📉';
-          console.log(`${emoji} [PAPER] ${tokenSymbol}: ${position.pnlPercent.toFixed(2)}% (${position.pnl.toFixed(4)} SOL)`);
-        }
-      }
     }
   }
-  
-  // 統計定期更新
+
+  // Stats update
   io.emit('stats_update', {
     ...tradeManager.getStats(),
     balance: tradeManager.getBalance(),
@@ -375,8 +364,8 @@ simulator.on('trade', async (event: TokenEvent) => {
   });
 });
 
-// 卒業時
-simulator.on('graduation', (event: TokenEvent) => {
+// 卒業時（Raydium上場検出）
+monitor.on('graduation', (event: TokenEvent) => {
   const { tokenName, tokenSymbol } = event.data;
   
   // ポジションの卒業フラグ更新
@@ -396,24 +385,61 @@ simulator.on('graduation', (event: TokenEvent) => {
   }
 });
 
-// ===== 定期更新 =====
+// ===== Periodic Updates =====
 
-// ポジション価格の定期更新（1秒ごと）
-setInterval(() => {
-  const positions = tradeManager.getAllPositions();
-  
-  positions.forEach(position => {
-    // 価格を少し揺らす（リアルっぽく）
-    const randomMove = (Math.random() - 0.5) * 0.02; // ±1%
-    position.pnlPercent += randomMove;
-    position.pnl = position.solAmount * (position.pnlPercent / 100);
-    position.currentPrice = position.entryPrice * (1 + position.pnlPercent / 100);
-  });
-  
-  if (positions.length > 0) {
-    io.emit('positions_update', positions);
+// Position price update via real market data from DEX Screener (10 second interval)
+setInterval(async () => {
+  const positions = tradeManager.getAllPositions().filter(p => !p.sold);
+
+  for (const position of positions) {
+    try {
+      // Fetch real price from DEX Screener API
+      const response = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${position.tokenMint}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+
+      if (!response.ok) continue;
+
+      const data: any = await response.json();
+      const pair = data.pairs?.[0];
+
+      if (pair && pair.priceUsd) {
+        const currentPriceUsd = parseFloat(pair.priceUsd);
+        const marketCap = pair.marketCap || 0;
+
+        // Calculate PnL based on real price changes
+        const entryPriceUsd = position.entryPrice;
+        const priceChangePercent = ((currentPriceUsd - entryPriceUsd) / entryPriceUsd) * 100;
+
+        position.pnlPercent = priceChangePercent;
+        position.pnl = position.solAmount * (priceChangePercent / 100);
+        position.currentPrice = currentPriceUsd;
+        position.currentMarketCap = marketCap;
+
+        // Check for auto-sell conditions
+        if (tradeManager.getConfig().autoSell) {
+          if (position.pnlPercent >= tradeManager.getConfig().takeProfitPercent) {
+            await tradeManager.executeSell(position.tokenMint, 'take_profit');
+            console.log(`💰 [PAPER] TAKE PROFIT: ${position.tokenSymbol} +${position.pnlPercent.toFixed(2)}%`);
+            io.emit('position_closed', position);
+          } else if (position.pnlPercent <= -tradeManager.getConfig().stopLossPercent) {
+            await tradeManager.executeSell(position.tokenMint, 'stop_loss');
+            console.log(`🛑 [PAPER] STOP LOSS: ${position.tokenSymbol} ${position.pnlPercent.toFixed(2)}%`);
+            io.emit('position_closed', position);
+          }
+        }
+      }
+    } catch (err) {
+      // Ignore fetch errors
+    }
   }
-}, 1000);
+
+  const activePositions = tradeManager.getAllPositions();
+  if (activePositions.length > 0) {
+    io.emit('positions_update', activePositions);
+  }
+}, 10000);
 
 // 統計定期ブロードキャスト（5秒ごと）
 setInterval(() => {
@@ -434,20 +460,24 @@ server.listen(PORT, () => {
 ║  Backend Server: http://localhost:${PORT}              ║
 ║  WebSocket: ws://localhost:${PORT}                     ║
 ║                                                        ║
-║  📊 Dashboard will be available on frontend            ║
-║  💰 Initial Balance: 100 SOL (Paper)                   ║
+║  📊 Dashboard: http://localhost:3000                 ║
+║  💰 Initial Balance: 100 SOL (PAPER - NO REAL MONEY) ║
+║  🔗 RPC: Helius Mainnet (WebSocket Real-Time)          ║
+║  🎯 Monitoring: REAL-TIME Blockchain Events              ║
+║  ⚡ Detection: Live Token Creation (No Delay)            ║
+║  ❌ NO SIMULATION - ONLY REAL BLOCKCHAIN DATA          ║
 ║                                                        ║
 ╚════════════════════════════════════════════════════════╝
   `);
-  
-  // シミュレーター開始
-  simulator.start();
+
+  // Start real-time Pump.fun monitoring
+  monitor.start();
 });
 
 // グレースフルシャットダウン
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down...');
-  simulator.stop();
+  monitor.stop();
   server.close(() => {
     console.log('✅ Server closed');
     process.exit(0);
