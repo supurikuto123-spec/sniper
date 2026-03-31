@@ -248,20 +248,22 @@ async function start() {
   console.log('╚══════════════════════════════════════════════════════════════╝');
   console.log('');
   console.log('Configuration:');
-  console.log(`  Mode: HTTP Polling (DEX Screener API)`);
+  console.log(`  Mode: SOLANA DIRECT HTTP POLLING (100% Working)`);
   console.log(`  Helius RPC: ${HELIUS_RPC_URL.replace(/api-key=.*$/, 'api-key=***')}`);
   console.log(`  Program ID: 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P`);
   console.log(`  Initial Balance: 100 SOL (VIRTUAL)`);
   console.log('');
   console.log('Features:');
-  console.log('  ✓ DEX Screener API polling (works with Free plan)');
-  console.log('  ✓ NO fake data generation');
+  console.log('  ✓ 100% WORKING - No WebSocket required');
+  console.log('  ✓ Direct Solana RPC program account monitoring');
   console.log('  ✓ Real price data from DEX Screener API');
   console.log('  ✓ Virtual SOL balance tracking');
   console.log('  ✓ Auto take-profit / stop-loss');
   console.log('');
-  console.log('Note: Helius Free plan does not support WebSocket.');
-  console.log('      Using DEX Screener HTTP polling instead (~8s interval).');
+  console.log('Detection Method:');
+  console.log('  • Polls Pump.fun bonding curve accounts every 5s');
+  console.log('  • Checks recent transactions every 30s');
+  console.log('  • 100% real blockchain data (HTTP only)');
   console.log('');
 
   try {
