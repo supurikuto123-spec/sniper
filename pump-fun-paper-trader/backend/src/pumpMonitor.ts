@@ -535,107 +535,117 @@ export class PumpMonitor extends EventEmitter {
   }
 
   /**
-   * Fetch token profile with social links and details from DEX Screener
-   * Uses /tokens/{address} endpoint which includes profile data
+   * Fetch token profile with social links from DEX Screener
+   * Tries multiple endpoints and extracts SNS from various response formats
    */
   private async fetchTokenProfileWithDetails(mint: string): Promise<{
     socialLinks?: SocialLinks;
-    devWallet?: string;
     name?: string;
     symbol?: string;
   } | undefined> {
     try {
-      // DEX Screenerのtokensエンドポイントはプロファイルデータを含む
-      const response = await fetch(`${DEX_SCREENER_API}/tokens/${mint}`, {
+      // Try the token pairs endpoint first
+      const response = await fetch(`${DEX_SCREENER_API}/token-pairs/v1/${mint}`, {
         headers: { 'Accept': 'application/json' },
       });
 
-      if (!response.ok) {
-        return undefined;
+      if (response.ok) {
+        const data = await response.json();
+        return this.extractSocialLinksFromData(data, mint);
       }
 
-      const data = await response.json() as {
-        pairs?: Array<{
-          baseToken: { 
-            address: string;
-            name: string;
-            symbol: string;
-          };
-          profile?: {
-            url?: string;
-            icon?: string;
-            description?: string;
-            links?: Array<{
-              type: string;
-              url: string;
-            }>;
-          };
-          info?: {
-            socials?: Array<{
-              type: string;
-              url: string;
-            }>;
-            websites?: Array<{
-              url: string;
-            }>;
-          };
-          dexId?: string;
-          chainId?: string;
-        }>;
-      };
+      // Fallback to standard tokens endpoint
+      const fallbackResponse = await fetch(`${DEX_SCREENER_API}/tokens/${mint}`, {
+        headers: { 'Accept': 'application/json' },
+      });
 
-      if (!data.pairs || data.pairs.length === 0) {
-        return undefined;
+      if (fallbackResponse.ok) {
+        const data = await fallbackResponse.json();
+        return this.extractSocialLinksFromData(data, mint);
       }
 
-      // 最も流動性の高いペアを選択
-      const pair = data.pairs[0];
-      const profile = pair.profile;
-      const info = pair.info;
-
-      // SNSリンクを抽出
-      const socialLinks: SocialLinks = {};
-
-      // profile.linksから抽出
-      if (profile?.links) {
-        for (const link of profile.links) {
-          if (link.type === 'twitter' || link.type === 'x') {
-            socialLinks.twitter = link.url;
-          } else if (link.type === 'website' || link.type === 'web') {
-            socialLinks.website = link.url;
-          } else if (link.type === 'telegram' || link.type === 'tg') {
-            socialLinks.telegram = link.url;
-          } else if (link.type === 'discord') {
-            socialLinks.discord = link.url;
-          }
-        }
-      }
-
-      // info.socialsから抽出（バックアップ）
-      if (info?.socials) {
-        for (const social of info.socials) {
-          if ((social.type === 'twitter' || social.type === 'x') && !socialLinks.twitter) {
-            socialLinks.twitter = social.url;
-          } else if (social.type === 'telegram' && !socialLinks.telegram) {
-            socialLinks.telegram = social.url;
-          } else if (social.type === 'discord' && !socialLinks.discord) {
-            socialLinks.discord = social.url;
-          }
-        }
-      }
-
-      // info.websitesから抽出
-      if (info?.websites && info.websites.length > 0 && !socialLinks.website) {
-        socialLinks.website = info.websites[0].url;
-      }
-
-      return {
-        socialLinks: Object.keys(socialLinks).length > 0 ? socialLinks : undefined,
-        name: pair.baseToken.name,
-        symbol: pair.baseToken.symbol,
-      };
+      return undefined;
     } catch (error) {
       console.error(`[PumpMonitor] Error fetching token profile for ${mint}:`, error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Extract social links from DEX Screener response data
+   * Handles multiple response formats
+   */
+  private extractSocialLinksFromData(data: any, mint: string): {
+    socialLinks?: SocialLinks;
+    name?: string;
+    symbol?: string;
+  } | undefined {
+    try {
+      const socialLinks: SocialLinks = {};
+      let name: string | undefined;
+      let symbol: string | undefined;
+
+      // Handle token-pairs format (v1 API)
+      if (data.pairs && Array.isArray(data.pairs)) {
+        const pair = data.pairs[0];
+        
+        // Extract name/symbol
+        if (pair.baseToken) {
+          name = pair.baseToken.name;
+          symbol = pair.baseToken.symbol;
+        }
+
+        // Extract from profile
+        if (pair.profile) {
+          const profile = pair.profile;
+          
+          // From profile.links
+          if (profile.links && Array.isArray(profile.links)) {
+            for (const link of profile.links) {
+              const type = link.type?.toLowerCase();
+              const url = link.url;
+              
+              if (type === 'twitter' || type === 'x') socialLinks.twitter = url;
+              else if (type === 'website' || type === 'web') socialLinks.website = url;
+              else if (type === 'telegram' || type === 'tg') socialLinks.telegram = url;
+              else if (type === 'discord') socialLinks.discord = url;
+            }
+          }
+        }
+
+        // Extract from info.socials
+        if (pair.info?.socials && Array.isArray(pair.info.socials)) {
+          for (const social of pair.info.socials) {
+            const type = social.type?.toLowerCase();
+            const url = social.url;
+            
+            if ((type === 'twitter' || type === 'x') && !socialLinks.twitter) {
+              socialLinks.twitter = url;
+            } else if (type === 'telegram' && !socialLinks.telegram) {
+              socialLinks.telegram = url;
+            } else if (type === 'discord' && !socialLinks.discord) {
+              socialLinks.discord = url;
+            }
+          }
+        }
+
+        // Extract from info.websites
+        if (pair.info?.websites && Array.isArray(pair.info.websites) && !socialLinks.website) {
+          socialLinks.website = pair.info.websites[0].url;
+        }
+      }
+
+      // Log result for debugging
+      const hasLinks = Object.keys(socialLinks).length > 0;
+      console.log(`[DEBUG] SNS for ${symbol || mint.slice(0,8)}: ${hasLinks ? Object.keys(socialLinks).join(',') : 'none'}`);
+
+      return {
+        socialLinks: hasLinks ? socialLinks : undefined,
+        name,
+        symbol,
+      };
+    } catch (error) {
+      console.error(`[PumpMonitor] Error extracting social links:`, error);
       return undefined;
     }
   }
