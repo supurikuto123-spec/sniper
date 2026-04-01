@@ -9,99 +9,145 @@
     <style>
         .profit { color: #22c55e; }
         .loss { color: #ef4444; }
-        .card { background: #1f2937; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .card { background: #1f2937; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
         .live-indicator {
             display: inline-block;
-            width: 8px;
-            height: 8px;
+            width: 10px;
+            height: 10px;
             background: #22c55e;
             border-radius: 50%;
             animation: pulse 2s infinite;
+            margin-right: 8px;
         }
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.1); }
         }
-        .check-pass { color: #22c55e; }
-        .check-fail { color: #ef4444; }
-        .token-card {
+        .position-card {
             background: #374151;
-            border-radius: 8px;
-            padding: 12px;
-            margin-bottom: 8px;
-            border-left: 4px solid #6b7280;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 1px solid #4b5563;
+            transition: all 0.2s;
         }
-        .token-card.safe { border-left-color: #22c55e; }
-        .token-card.medium { border-left-color: #f59e0b; }
-        .token-card.risky { border-left-color: #ef4444; }
-        .safety-badge {
+        .position-card:hover {
+            border-color: #6b7280;
+            transform: translateY(-2px);
+        }
+        .position-card.profit { border-left: 4px solid #22c55e; }
+        .position-card.loss { border-left: 4px solid #ef4444; }
+        .mini-chart {
+            width: 100%;
+            height: 60px;
+        }
+        .chart-line {
+            fill: none;
+            stroke-width: 2;
+        }
+        .chart-line.price { stroke: #60a5fa; }
+        .chart-line.pnl { stroke: #22c55e; }
+        .chart-line.pnl.negative { stroke: #ef4444; }
+        .chart-area {
+            fill-opacity: 0.1;
+        }
+        .chart-area.price { fill: #60a5fa; }
+        .chart-area.pnl { fill: #22c5fa; }
+        .badge {
             display: inline-flex;
             align-items: center;
-            padding: 2px 8px;
-            border-radius: 12px;
+            padding: 4px 10px;
+            border-radius: 20px;
             font-size: 0.75rem;
             font-weight: 600;
         }
+        .badge-safe { background: #064e3b; color: #34d399; }
+        .badge-buy { background: #1e40af; color: #60a5fa; }
+        .pump-link {
+            color: #a855f7;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .pump-link:hover {
+            color: #c084fc;
+            text-decoration: underline;
+        }
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        .token-meta {
+            font-size: 0.875rem;
+            color: #9ca3af;
+        }
     </style>
 </head>
-<body class="bg-gray-900 text-white min-h-screen">
-    <div class="container mx-auto px-4 py-6 max-w-6xl">
+<body class="bg-gray-950 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-6 max-w-7xl">
         <!-- Header -->
-        <div class="flex justify-between items-center mb-6">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
             <div>
-                <h1 class="text-3xl font-bold">Pump.fun Paper Trading Bot</h1>
-                <p class="text-gray-400 mt-1">
+                <h1 class="text-2xl md:text-3xl font-bold flex items-center">
                     <span class="live-indicator"></span>
-                    リアルタイムモニタリング中
+                    Pump.fun Paper Trading Bot
+                </h1>
+                <p class="text-gray-400 mt-1 text-sm">
+                    厳格条件: DevBuy ≥0.5 SOL + DevLock + SNSリンク必須
                 </p>
-                <p class="text-xs text-gray-500 mt-1">Safety Checks: SNS Links | Dev Buy ≥0.5 SOL | Dev Lock</p>
             </div>
-            <div class="text-right">
+            <div class="text-right bg-gray-900 rounded-lg p-4 border border-gray-800">
                 <div class="text-sm text-gray-400">バーチャル残高</div>
-                <div class="text-2xl font-bold" id="balance">100.0000 SOL</div>
-                <div class="text-sm" id="balance-change"></div>
+                <div class="text-3xl font-bold" id="balance">100.0000 SOL</div>
+                <div class="text-sm mt-1" id="balance-change"></div>
             </div>
         </div>
 
         <!-- Stats Cards -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div class="card">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+            <div class="card text-center">
                 <div class="text-sm text-gray-400">総取引数</div>
-                <div class="text-xl font-bold" id="total-trades">0</div>
+                <div class="stat-value" id="total-trades">0</div>
             </div>
-            <div class="card">
-                <div class="text-sm text-gray-400">勝ち取引</div>
-                <div class="text-xl font-bold profit" id="winning-trades">0</div>
+            <div class="card text-center">
+                <div class="text-sm text-gray-400">勝ち</div>
+                <div class="stat-value profit" id="winning-trades">0</div>
             </div>
-            <div class="card">
-                <div class="text-sm text-gray-400">負け取引</div>
-                <div class="text-xl font-bold loss" id="losing-trades">0</div>
+            <div class="card text-center">
+                <div class="text-sm text-gray-400">負け</div>
+                <div class="stat-value loss" id="losing-trades">0</div>
             </div>
-            <div class="card">
-                <div class="text-sm text-gray-400">PnL</div>
-                <div class="text-xl font-bold" id="total-pnl">0 SOL</div>
+            <div class="card text-center">
+                <div class="text-sm text-gray-400">PnL (SOL)</div>
+                <div class="stat-value" id="total-pnl-sol">0</div>
+            </div>
+            <div class="card text-center">
+                <div class="text-sm text-gray-400">PnL (%)</div>
+                <div class="stat-value" id="total-pnl-pct">0%</div>
             </div>
         </div>
 
         <!-- Controls -->
-        <div class="flex gap-2 mb-6">
-            <button onclick="pauseTrading()" class="bg-yellow-600 hover:bg-yellow-700 px-4 py-2 rounded">一時停止</button>
-            <button onclick="resumeTrading()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">再開</button>
-            <button onclick="sellAll()" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded">全売却</button>
-            <button onclick="resetAll()" class="bg-gray-600 hover:bg-gray-700 px-4 py-2 rounded">リセット</button>
+        <div class="flex flex-wrap gap-2 mb-6">
+            <button onclick="pauseTrading()" class="bg-yellow-600 hover:bg-yellow-700 px-4 py-2 rounded-lg font-medium transition">⏸ 一時停止</button>
+            <button onclick="resumeTrading()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg font-medium transition">▶ 再開</button>
+            <button onclick="sellAll()" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg font-medium transition">💰 全売却</button>
+            <button onclick="resetAll()" class="bg-gray-600 hover:bg-gray-700 px-4 py-2 rounded-lg font-medium transition">🔄 リセット</button>
         </div>
 
         <!-- Open Positions -->
         <div class="card">
-            <h2 class="text-xl font-bold mb-4">保有ポジション (<span id="position-count">0</span>)</h2>
-            <div id="positions-list" class="space-y-2">
-                <p class="text-gray-500">ポジションがありません</p>
+            <h2 class="text-xl font-bold mb-4 flex items-center justify-between">
+                <span>📊 保有ポジション (<span id="position-count">0</span>)</span>
+                <span class="text-sm font-normal text-gray-400">リアルタイム価格・収益チャート付き</span>
+            </h2>
+            <div id="positions-list" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <p class="text-gray-500 col-span-full">ポジションがありません</p>
             </div>
         </div>
 
-        <!-- Recent Tokens with Safety Checks -->
+        <!-- Recent Detected Tokens -->
         <div class="card">
-            <h2 class="text-xl font-bold mb-4">最近検出したトークン (Safety Score付き)</h2>
+            <h2 class="text-xl font-bold mb-4">🔍 最近検出したトークン (購入条件を満たしたもののみ表示)</h2>
             <div id="tokens-list" class="space-y-2">
                 <p class="text-gray-500">トークンが検出されていません</p>
             </div>
@@ -109,7 +155,7 @@
 
         <!-- Trade History -->
         <div class="card">
-            <h2 class="text-xl font-bold mb-4">取引履歴</h2>
+            <h2 class="text-xl font-bold mb-4">📈 取引履歴</h2>
             <div id="history-list" class="space-y-2">
                 <p class="text-gray-500">履歴がありません</p>
             </div>
@@ -117,8 +163,8 @@
 
         <!-- Log -->
         <div class="card">
-            <h2 class="text-xl font-bold mb-4">ログ</h2>
-            <div id="log" class="h-48 overflow-y-auto text-sm font-mono bg-gray-800 p-2 rounded">
+            <h2 class="text-xl font-bold mb-4">📝 ログ</h2>
+            <div id="log" class="h-48 overflow-y-auto text-sm font-mono bg-gray-900 p-3 rounded-lg border border-gray-700">
             </div>
         </div>
     </div>
@@ -137,55 +183,93 @@
         }
 
         function formatNumber(num, decimals = 4) {
-            return num ? num.toFixed(decimals) : '0';
+            if (num === null || num === undefined) return '0';
+            return num.toFixed(decimals);
         }
 
         function formatUsd(num) {
             if (!num || num === 0) return '$0';
             if (num >= 1000000) return `$${(num/1000000).toFixed(2)}M`;
             if (num >= 1000) return `$${(num/1000).toFixed(2)}K`;
-            return `$${num.toFixed(2)}`;
+            return `$${num.toFixed(4)}`;
         }
 
-        function getSafetyClass(score) {
-            if (score >= 70) return 'safe';
-            if (score >= 40) return 'medium';
-            return 'risky';
+        // Draw SVG line chart
+        function drawChart(data, type = 'price', width = 300, height = 60) {
+            if (!data || data.length < 2) return '';
+            
+            const values = data.map(d => type === 'pnl' ? (d.pnlPercent || 0) : (d.priceUsd || 0));
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const range = max - min || 1;
+            
+            const points = values.map((v, i) => {
+                const x = (i / (values.length - 1)) * width;
+                const y = height - ((v - min) / range) * height;
+                return `${x},${y}`;
+            }).join(' ');
+            
+            const colorClass = type === 'pnl' 
+                ? (values[values.length - 1] >= 0 ? 'pnl' : 'pnl negative')
+                : 'price';
+            
+            return `
+                <svg class="mini-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+                    <polyline class="chart-line ${colorClass}" points="${points}"/>
+                </svg>
+            `;
         }
 
-        function getSafetyBadge(score) {
-            if (score >= 70) return '<span class="safety-badge bg-green-900 text-green-300">SAFE</span>';
-            if (score >= 40) return '<span class="safety-badge bg-yellow-900 text-yellow-300">MEDIUM</span>';
-            return '<span class="safety-badge bg-red-900 text-red-300">RISKY</span>';
+        // Draw PnL bar chart
+        function drawPnlChart(data, width = 300, height = 60) {
+            if (!data || data.length < 2) return '';
+            
+            const barWidth = width / data.length;
+            const bars = data.map((d, i) => {
+                const pnl = d.pnlPercent || 0;
+                const barHeight = Math.abs(pnl) * 2; // Scale factor
+                const x = i * barWidth;
+                const y = pnl >= 0 ? height - barHeight : height / 2;
+                const color = pnl >= 0 ? '#22c55e' : '#ef4444';
+                return `<rect x="${x}" y="${pnl >= 0 ? y : height/2}" width="${barWidth - 1}" height="${barHeight}" fill="${color}" opacity="0.7"/>`;
+            }).join('');
+            
+            // Zero line
+            const zeroLine = `<line x1="0" y1="${height/2}" x2="${width}" y2="${height/2}" stroke="#6b7280" stroke-width="1"/>`;
+            
+            return `
+                <svg class="mini-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+                    ${zeroLine}
+                    ${bars}
+                </svg>
+            `;
         }
 
         // Socket events
         socket.on('connect', () => {
-            log('サーバーに接続しました');
+            log('✅ サーバーに接続しました');
         });
 
         socket.on('initial', (data) => {
             updateBalance(data.balance);
             updatePositions(data.positions);
             updateTokens(data.tokens);
-            log(`初期データ受信: ${data.positions.length}ポジション, ${data.tokens.length}トークン`);
+            log(`初期データ受信: ${data.positions?.length || 0}ポジション, ${data.tokens?.length || 0}トークン`);
         });
 
         socket.on('token', (event) => {
-            // Handle both event.data and direct token properties
             const token = event.data || event.token || event;
             const symbol = token.symbol || 'UNKNOWN';
-            const safetyScore = token.safetyScore || 0;
+            
+            // Only log tokens that passed the strict checks
             const checks = token.checks || {};
+            const passedAll = checks.devBuyLarge && checks.devLockEnabled && (checks.hasTwitter || checks.hasWebsite);
             
-            log(`新規トークン検出: ${symbol} (Safety: ${safetyScore})`);
-            
-            // Add detailed log about checks
-            const twitter = checks.hasTwitter ? '✓' : '✗';
-            const website = checks.hasWebsite ? '✓' : '✗';
-            const devBuy = checks.devBuyLarge ? '✓' : '✗';
-            const devLock = checks.devLockEnabled ? '✓' : '✗';
-            log(`  Checks - Twitter:${twitter} Web:${website} DevBuy:${devBuy} Lock:${devLock}`);
+            if (passedAll) {
+                log(`🎯 購入対象検出: ${symbol} (すべての条件を満たし購入しました)`);
+            } else {
+                log(`⏭ スキップ: ${symbol} (条件未達: DevBuy=${checks.devBuyLarge}, Lock=${checks.devLockEnabled}, SNS=${checks.hasTwitter || checks.hasWebsite})`);
+            }
             
             tokens.unshift(token);
             if (tokens.length > 20) tokens.pop();
@@ -195,16 +279,17 @@
         socket.on('position', (event) => {
             if (event.type === 'open') {
                 const pos = event.position || event.data;
-                log(`ポジション開設: ${pos?.symbol || 'Unknown'}`);
+                log(`🚀 ポジション #${pos?.buyOrderNumber} 開設: ${pos?.symbol}`);
             }
             fetchPositions();
         });
 
         socket.on('trade', (event) => {
             const pos = event.position || event.data;
-            const reason = event.reason || 'unknown';
+            const reason = event.reason || 'manual';
             const pnl = pos?.pnlSol || 0;
-            log(`取引完了: ${pos?.symbol || 'Unknown'} (${reason}) - PnL: ${formatNumber(pnl)} SOL`);
+            const emoji = pnl >= 0 ? '🟢' : '🔴';
+            log(`${emoji} 取引完了 #${pos?.buyOrderNumber}: ${pos?.symbol} (${reason}) - PnL: ${formatNumber(pnl)} SOL`);
             fetchHistory();
             fetchStats();
         });
@@ -218,7 +303,7 @@
         });
 
         socket.on('disconnect', () => {
-            log('サーバーから切断しました');
+            log('❌ サーバーから切断しました');
         });
 
         // API calls
@@ -255,43 +340,52 @@
 
         async function pauseTrading() {
             await fetch('http://localhost:3000/api/pause', { method: 'POST' });
-            log('取引を一時停止しました');
+            log('⏸ 取引を一時停止しました');
         }
 
         async function resumeTrading() {
             await fetch('http://localhost:3000/api/resume', { method: 'POST' });
-            log('取引を再開しました');
+            log('▶ 取引を再開しました');
         }
 
         async function sellAll() {
             const res = await fetch('http://localhost:3000/api/sell-all', { method: 'POST' });
             const data = await res.json();
-            log(`${data.soldCount}ポジションを売却しました`);
+            log(`💰 ${data.soldCount}ポジションを売却しました`);
         }
 
         async function resetAll() {
             await fetch('http://localhost:3000/api/reset', { method: 'POST' });
-            log('すべてリセットしました');
+            log('🔄 すべてリセットしました');
             location.reload();
         }
 
         // UI updates
         function updateBalance(balance) {
+            if (!balance) return;
             document.getElementById('balance').textContent = `${formatNumber(balance.current)} SOL`;
             const change = balance.current - balance.initial;
             const changeEl = document.getElementById('balance-change');
-            changeEl.textContent = `${change >= 0 ? '+' : ''}${formatNumber(change)} SOL`;
-            changeEl.className = change >= 0 ? 'text-sm profit' : 'text-sm loss';
+            const pct = balance.initial > 0 ? (change / balance.initial) * 100 : 0;
+            changeEl.innerHTML = `${change >= 0 ? '+' : ''}${formatNumber(change)} SOL (${change >= 0 ? '+' : ''}${formatNumber(pct, 2)}%)`;
+            changeEl.className = `text-sm font-bold ${change >= 0 ? 'profit' : 'loss'}`;
         }
 
         function updateStats(stats) {
+            if (!stats) return;
             document.getElementById('total-trades').textContent = stats.totalTrades || 0;
             document.getElementById('winning-trades').textContent = stats.winningTrades || 0;
             document.getElementById('losing-trades').textContent = stats.losingTrades || 0;
-            const pnlEl = document.getElementById('total-pnl');
+            
+            const pnlSolEl = document.getElementById('total-pnl-sol');
             const pnl = stats.totalPnlSol || 0;
-            pnlEl.textContent = `${formatNumber(pnl)} SOL`;
-            pnlEl.className = `text-xl font-bold ${pnl >= 0 ? 'profit' : 'loss'}`;
+            pnlSolEl.textContent = `${formatNumber(pnl)} SOL`;
+            pnlSolEl.className = `stat-value ${pnl >= 0 ? 'profit' : 'loss'}`;
+            
+            const pnlPctEl = document.getElementById('total-pnl-pct');
+            const pnlPct = stats.totalPnlPercent || 0;
+            pnlPctEl.textContent = `${pnlPct >= 0 ? '+' : ''}${formatNumber(pnlPct, 2)}%`;
+            pnlPctEl.className = `stat-value ${pnlPct >= 0 ? 'profit' : 'loss'}`;
         }
 
         function updatePositions(data) {
@@ -300,35 +394,76 @@
             const list = document.getElementById('positions-list');
             
             if (positions.length === 0) {
-                list.innerHTML = '<p class="text-gray-500">ポジションがありません</p>';
+                list.innerHTML = '<p class="text-gray-500 col-span-full text-center py-8">ポジションがありません</p>';
                 return;
             }
 
-            list.innerHTML = positions.map(p => `
-                <div class="flex justify-between items-center bg-gray-800 p-3 rounded">
-                    <div>
-                        <div class="font-bold">${p.symbol}</div>
-                        <div class="text-sm text-gray-400">Entry: ${formatUsd(p.entryPriceUsd)}</div>
-                        <div class="text-sm text-gray-400">Current: ${formatUsd(p.currentPriceUsd)}</div>
+            list.innerHTML = positions.map(p => {
+                const priceChart = drawChart(p.priceHistory, 'price', 280, 50);
+                const pnlChart = drawPnlChart(p.priceHistory, 280, 40);
+                const isProfit = p.pnlPercent >= 0;
+                
+                return `
+                <div class="position-card ${isProfit ? 'profit' : 'loss'}">
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="badge badge-buy">#${p.buyOrderNumber || '?'}</span>
+                                <a href="https://pump.fun/coin/${p.mint}" target="_blank" class="pump-link text-lg font-bold">
+                                    ${p.name} ($${p.symbol})
+                                </a>
+                            </div>
+                            <div class="token-meta">
+                                購入順位: ${p.buyerRank}位 / ${p.totalBuyersAtEntry}人中 | 
+                                保有量: ${formatNumber(p.tokenAmount, 2)} tokens
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-2xl font-bold ${isProfit ? 'profit' : 'loss'}">
+                                ${isProfit ? '+' : ''}${formatNumber(p.pnlPercent, 2)}%
+                            </div>
+                            <div class="text-sm ${isProfit ? 'profit' : 'loss'}">
+                                ${isProfit ? '+' : ''}${formatNumber(p.pnlSol)} SOL
+                            </div>
+                        </div>
                     </div>
-                    <div class="text-right">
-                        <div class="text-lg font-bold ${p.pnlPercent >= 0 ? 'profit' : 'loss'}">
-                            ${p.pnlPercent >= 0 ? '+' : ''}${formatNumber(p.pnlPercent, 2)}%
+                    
+                    <div class="grid grid-cols-2 gap-4 mb-3 text-sm">
+                        <div>
+                            <div class="text-gray-400 text-xs">Entry Price</div>
+                            <div class="font-mono">${formatUsd(p.entryPriceUsd)}</div>
                         </div>
-                        <div class="text-sm ${p.pnlSol >= 0 ? 'profit' : 'loss'}">
-                            ${p.pnlSol >= 0 ? '+' : ''}${formatNumber(p.pnlSol)} SOL
+                        <div>
+                            <div class="text-gray-400 text-xs">Current Price</div>
+                            <div class="font-mono ${isProfit ? 'profit' : 'loss'}">${formatUsd(p.currentPriceUsd)}</div>
                         </div>
-                        <button onclick="sellPosition('${p.mint}')" class="mt-1 bg-red-600 hover:bg-red-700 px-3 py-1 rounded text-sm">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <div class="text-gray-400 text-xs mb-1">📈 Price Chart</div>
+                        ${priceChart}
+                    </div>
+                    
+                    <div class="mb-3">
+                        <div class="text-gray-400 text-xs mb-1">💰 PnL Chart</div>
+                        ${pnlChart}
+                    </div>
+                    
+                    <div class="flex justify-between items-center">
+                        <div class="text-xs text-gray-500">
+                            MC: ${formatUsd(p.currentMarketCap)} | Holders: ${p.holderCount || '?'}
+                        </div>
+                        <button onclick="sellPosition('${p.mint}')" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-sm font-medium transition">
                             売却
                         </button>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         async function sellPosition(mint) {
             await fetch(`http://localhost:3000/api/sell/${mint}`, { method: 'POST' });
-            log(`手動売却: ${mint.slice(0, 16)}...`);
+            log(`💸 手動売却: ${mint.slice(0, 16)}...`);
             fetchPositions();
         }
 
@@ -341,43 +476,37 @@
                 return;
             }
 
-            list.innerHTML = tokens.slice(0, 10).map(t => {
-                const safetyScore = t.safetyScore || 0;
+            // Only show tokens that passed all strict checks
+            const passedTokens = tokens.filter(t => {
                 const checks = t.checks || {};
-                const safetyClass = getSafetyClass(safetyScore);
-                const safetyBadge = getSafetyBadge(safetyScore);
+                return checks.devBuyLarge && checks.devLockEnabled && (checks.hasTwitter || checks.hasWebsite);
+            });
+
+            if (passedTokens.length === 0) {
+                list.innerHTML = '<p class="text-gray-500">購入条件を満たしたトークンはまだありません (DevBuy≥0.5 + DevLock + SNS必須)</p>';
+                return;
+            }
+
+            list.innerHTML = passedTokens.slice(0, 10).map(t => {
+                const checks = t.checks || {};
                 
                 return `
-                <div class="token-card ${safetyClass}">
+                <div class="bg-gray-800 rounded-lg p-4 border-l-4 border-green-500">
                     <div class="flex justify-between items-start mb-2">
                         <div>
-                            <span class="font-bold text-lg">${t.symbol}</span>
-                            <span class="text-gray-400 text-sm"> - ${t.name}</span>
+                            <a href="https://pump.fun/coin/${t.mint}" target="_blank" class="pump-link text-lg font-bold">
+                                ${t.name} ($${t.symbol})
+                            </a>
+                            <div class="text-sm text-gray-400 mt-1">
+                                Price: ${formatUsd(t.priceUsd)} | MC: ${formatUsd(t.marketCap)}
+                            </div>
                         </div>
-                        <div>${safetyBadge}</div>
+                        <span class="badge badge-safe">✓ 購入済み</span>
                     </div>
-                    <div class="grid grid-cols-2 gap-2 text-sm mb-2">
-                        <div>Price: ${formatUsd(t.priceUsd)}</div>
-                        <div>MC: ${formatUsd(t.marketCap)}</div>
-                    </div>
-                    <div class="flex gap-3 text-xs">
-                        <span class="${checks.hasTwitter ? 'check-pass' : 'check-fail'}">
-                            Twitter: ${checks.hasTwitter ? '✓' : '✗'}
-                        </span>
-                        <span class="${checks.hasWebsite ? 'check-pass' : 'check-fail'}">
-                            Web: ${checks.hasWebsite ? '✓' : '✗'}
-                        </span>
-                        <span class="${checks.devBuyLarge ? 'check-pass' : 'check-fail'}">
-                            DevBuy≥0.5: ${checks.devBuyLarge ? '✓' : '✗'}
-                            ${t.devInitialBuy ? `(${t.devInitialBuy.toFixed(2)}SOL)` : ''}
-                        </span>
-                        <span class="${checks.devLockEnabled ? 'check-pass' : 'check-fail'}">
-                            Lock: ${checks.devLockEnabled ? '✓' : '✗'}
-                        </span>
-                    </div>
-                    <div class="mt-2 text-xs text-gray-500">
-                        Mint: ${t.mint?.slice(0, 20)}... | 
-                        <a href="https://solscan.io/tx/${t.signature}" target="_blank" class="text-blue-400 hover:text-blue-300">View TX</a>
+                    <div class="flex gap-3 text-xs text-gray-400">
+                        <span class="text-green-400">DevBuy: ${t.devInitialBuy?.toFixed(2)} SOL ✓</span>
+                        <span class="text-green-400">DevLock: ✓</span>
+                        <span class="text-green-400">${checks.hasTwitter ? 'Twitter ✓' : ''} ${checks.hasWebsite ? 'Web ✓' : ''}</span>
                     </div>
                 </div>
             `}).join('');
@@ -392,18 +521,23 @@
                 return;
             }
 
-            list.innerHTML = history.slice(0, 10).map(h => `
-                <div class="flex justify-between items-center bg-gray-800 p-2 rounded text-sm">
-                    <div>
-                        <span class="font-bold">${h.symbol}</span>
-                        <span class="text-gray-400"> SOLD (${h.exitReason || 'manual'})</span>
+            list.innerHTML = history.slice(0, 15).map(h => {
+                const isProfit = h.pnlPercent >= 0;
+                return `
+                <div class="flex justify-between items-center bg-gray-800 p-3 rounded-lg">
+                    <div class="flex items-center gap-2">
+                        <span class="badge ${isProfit ? 'badge-safe' : 'bg-red-900 text-red-300'}">#${h.buyOrderNumber || '?'}</span>
+                        <a href="https://pump.fun/coin/${h.mint}" target="_blank" class="pump-link font-bold">
+                            ${h.name} ($${h.symbol})
+                        </a>
+                        <span class="text-xs text-gray-400">(${h.exitReason || 'manual'})</span>
                     </div>
-                    <div class="text-right ${h.pnlPercent >= 0 ? 'profit' : 'loss'}">
-                        ${h.pnlPercent >= 0 ? '+' : ''}${formatNumber(h.pnlPercent, 2)}%
-                        (${h.pnlSol >= 0 ? '+' : ''}${formatNumber(h.pnlSol)} SOL)
+                    <div class="text-right ${isProfit ? 'profit' : 'loss'}">
+                        <div class="font-bold">${isProfit ? '+' : ''}${formatNumber(h.pnlPercent, 2)}%</div>
+                        <div class="text-sm">${isProfit ? '+' : ''}${formatNumber(h.pnlSol)} SOL</div>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         // Initial load

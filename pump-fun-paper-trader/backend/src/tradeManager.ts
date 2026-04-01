@@ -2,6 +2,7 @@
  * TradeManager - Paper trading position management
  * 
  * Manages virtual SOL balance and paper trading positions.
+ * STRICT BUY CONDITIONS: Only buys when DevBuy ≥0.5 SOL + DevLock + SNS Links
  * NO FAKE DATA - All price data comes from real DEX Screener API.
  */
 
@@ -36,11 +37,44 @@ export class TradeManager extends EventEmitter {
 
   /**
    * Handle new token detection from blockchain
+   * STRICT: Only buys if ALL conditions met:
+   * 1. Dev buy ≥ 0.5 SOL
+   * 2. Dev lock enabled (graduated)
+   * 3. Has SNS links (Twitter or Website)
    */
   async onNewToken(token: Token): Promise<void> {
     if (this.isPaused) {
       return;
     }
+
+    // STRICT SAFETY CHECKS - All must pass
+    const checks = token.checks || {};
+    
+    // Check 1: Dev buy ≥ 0.5 SOL
+    const hasDevBuy = checks.devBuyLarge === true;
+    if (!hasDevBuy) {
+      console.log(`[TradeManager] SKIP ${token.symbol}: DevBuy < 0.5 SOL (${token.devInitialBuy?.toFixed(2) || 0} SOL)`);
+      return;
+    }
+
+    // Check 2: Dev lock enabled (graduated)
+    const hasDevLock = checks.devLockEnabled === true;
+    if (!hasDevLock) {
+      console.log(`[TradeManager] SKIP ${token.symbol}: DevLock not enabled (not graduated)`);
+      return;
+    }
+
+    // Check 3: Has SNS links (Twitter or Website)
+    const hasSnsLinks = checks.hasTwitter === true || checks.hasWebsite === true;
+    if (!hasSnsLinks) {
+      console.log(`[TradeManager] SKIP ${token.symbol}: No SNS links (Twitter: ${checks.hasTwitter}, Website: ${checks.hasWebsite})`);
+      return;
+    }
+
+    console.log(`[TradeManager] ✓ ALL CHECKS PASSED for ${token.symbol}:`);
+    console.log(`  - DevBuy: ${token.devInitialBuy?.toFixed(2)} SOL ≥ 0.5 ✓`);
+    console.log(`  - DevLock: ${checks.devLockEnabled} ✓`);
+    console.log(`  - SNS: Twitter=${checks.hasTwitter}, Web=${checks.hasWebsite} ✓`);
 
     // Check if we can open more positions
     if (this.config.maxPositions > 0 && this.positions.size >= this.config.maxPositions) {
@@ -79,9 +113,12 @@ export class TradeManager extends EventEmitter {
       const effectiveSol = this.config.buyAmountSol - tradingFee;
       const tokenAmount = entryPrice > 0 ? effectiveSol / entryPrice : 0;
 
+      // Buy order number (which position number this is)
+      const buyOrderNumber = this.nextPositionId;
+
       // Create position
       const position: TradePosition = {
-        id: `trade-${timestamp}-${this.nextPositionId++}`,
+        id: `trade-${timestamp}-${buyOrderNumber}`,
         mint: token.mint,
         name: token.name,
         symbol: token.symbol,
@@ -106,6 +143,7 @@ export class TradeManager extends EventEmitter {
           marketCap: entryMarketCap,
           pnlPercent: 0,
         }],
+        buyOrderNumber, // Track which number position this is
       };
 
       // Deduct from balance
@@ -120,8 +158,8 @@ export class TradeManager extends EventEmitter {
       // Emit event
       this.emit('position', { type: 'open', position });
 
-      console.log(`[TradeManager] OPENED position: ${position.symbol}`);
-      console.log(`  Entry: $${entryPrice.toFixed(6)} | Market Cap: $${entryMarketCap.toFixed(0)}`);
+      console.log(`[TradeManager] 🚀 OPENED position #${buyOrderNumber}: ${position.symbol}`);
+      console.log(`  Entry: $${entryPrice.toFixed(10)} | Market Cap: $${entryMarketCap.toFixed(0)}`);
       console.log(`  Spent: ${position.solSpent.toFixed(4)} SOL | Balance: ${this.balance.toFixed(4)} SOL`);
 
     } catch (error) {
@@ -289,6 +327,7 @@ export class TradeManager extends EventEmitter {
       position.sold = true;
       position.exitTime = timestamp;
       position.exitPriceUsd = position.currentPriceUsd;
+      position.exitReason = reason;
       position.pnlSol = netProceeds - position.solSpent;
       position.pnlPercent = position.solSpent > 0 
         ? (position.pnlSol / position.solSpent) * 100 
@@ -312,7 +351,7 @@ export class TradeManager extends EventEmitter {
         proceeds: netProceeds,
       });
 
-      console.log(`[TradeManager] CLOSED position: ${position.symbol} (${reason})`);
+      console.log(`[TradeManager] CLOSED position #${position.buyOrderNumber}: ${position.symbol} (${reason})`);
       console.log(`  Exit: $${position.exitPriceUsd?.toFixed(6) || 'N/A'}`);
       console.log(`  PnL: ${position.pnlSol.toFixed(4)} SOL (${position.pnlPercent.toFixed(2)}%)`);
       console.log(`  Balance: ${this.balance.toFixed(4)} SOL`);

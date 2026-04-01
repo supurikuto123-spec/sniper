@@ -137,6 +137,10 @@ export interface TradePosition {
   holderCount: number;
   /** Price history for this position */
   priceHistory: PriceHistoryPoint[];
+  /** Buy order number (which position number this is) */
+  buyOrderNumber?: number;
+  /** Exit reason (manual, take_profit, stop_loss, timeout) */
+  exitReason?: string;
 }
 
 /** Trading configuration */

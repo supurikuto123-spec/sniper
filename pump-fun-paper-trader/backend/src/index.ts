@@ -260,6 +260,11 @@ async function start() {
   console.log('  ✓ Virtual SOL balance tracking');
   console.log('  ✓ Auto take-profit / stop-loss');
   console.log('');
+  console.log('STRICT BUY CONDITIONS (ALL must be met):');
+  console.log('  🔒 Dev Buy ≥ 0.5 SOL');
+  console.log('  🔒 Dev Lock enabled (graduated)');
+  console.log('  🔒 SNS Links (Twitter or Website)');
+  console.log('');
   console.log('Detection Method:');
   console.log('  • Polls Pump.fun bonding curve accounts every 5s');
   console.log('  • Checks recent transactions every 30s');
