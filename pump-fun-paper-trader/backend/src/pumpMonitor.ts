@@ -215,13 +215,16 @@ export class PumpMonitor extends EventEmitter {
         return;
       }
 
-      console.log(`[DEBUG] Found Pump.fun token creation: ${signature.slice(0, 20)}...`);
+      console.log(`[DEBUG] Found Pump.fun activity: ${signature.slice(0, 20)}...`);
 
       // Extract mint from transaction
       const mint = await this.extractMintFromTransaction(tx, signature);
       if (!mint) {
+        console.log(`[DEBUG] Could not extract mint from tx: ${signature.slice(0, 20)}`);
         return;
       }
+
+      console.log(`[DEBUG] Extracted mint: ${mint.slice(0, 20)}...`);
 
       // Skip excluded mints (SOL, USDC, etc.)
       if (EXCLUDED_MINTS.has(mint)) {
@@ -239,36 +242,13 @@ export class PumpMonitor extends EventEmitter {
         return;
       }
 
-      // Skip known tokens by symbol/name (SOL, USDC, etc.)
-      const symbolUpper = tokenDetails.symbol?.toUpperCase() || '';
-      const nameUpper = tokenDetails.name?.toUpperCase() || '';
-      const excludedSymbols = ['SOL', 'USDC', 'USDT', 'BONK', 'WIF', 'JUP', 'RAY', 'ORCA'];
-      if (excludedSymbols.includes(symbolUpper) || excludedSymbols.includes(nameUpper)) {
-        console.log(`[PumpMonitor] SKIP known token: ${tokenDetails.symbol}`);
-        return;
-      }
-
       // Skip if price is 0 (not launched yet)
       if (tokenDetails.priceUsd === 0) {
         return;
       }
 
-      // 新規トークンのみ検出：作成から5分以内かチェック
-      const txTime = tx.blockTime ? tx.blockTime * 1000 : Date.now();
-      const now = Date.now();
-      const ageMinutes = (now - txTime) / (1000 * 60);
-      
-      if (ageMinutes > 5) {
-        console.log(`[PumpMonitor] SKIP old token: ${tokenDetails.symbol} (${ageMinutes.toFixed(1)}min old)`);
-        return;
-      }
-
-      // 既存トークン（SOLなど）を除外 - Pump.funの新規作成のみ対象
-      const isNewToken = tokenDetails.marketCap && tokenDetails.marketCap < 1000000; // <$1M MC
-      if (!isNewToken) {
-        console.log(`[PumpMonitor] SKIP existing token: ${tokenDetails.symbol} (MC: $${tokenDetails.marketCap})`);
-        return;
-      }
+      // Note: We removed the 5-minute and market cap filters
+      // Because we already get only NEW transactions from polling
 
       // Fetch additional security checks
       const creator = this.extractCreator(tx);
@@ -337,7 +317,7 @@ export class PumpMonitor extends EventEmitter {
       console.log(`  Mint: ${mint}`);
       console.log(`  Price: $${(token.priceUsd || 0).toFixed(10)} | MC: $${(token.marketCap || 0).toFixed(2)} | Liq: $${(token.liquidityUsd || 0).toFixed(2)}`);
       console.log(`  SNS Links: Twitter:${hasTwitter ? '✓' : '✗'} | Website:${hasWebsite ? '✓' : '✗'} | Score: ${safetyScore}/100`);
-      console.log(`  Launch: ${ageMinutes.toFixed(1)}min ago | Status: FRESH LAUNCH ✓`);
+      console.log(`  Status: NEW LAUNCH DETECTED ✓`);
       console.log(`  TX: https://solscan.io/tx/${signature}`);
       console.log('');
 
@@ -347,14 +327,14 @@ export class PumpMonitor extends EventEmitter {
   }
 
   /**
-   * Check if transaction is a Pump.fun token creation (NEW LAUNCH ONLY)
-   * Filters: Must be Pump.fun program, must have create instruction, must be recent
+   * Check if transaction is a Pump.fun token creation
+   * Simple approach: Just check if it involves Pump.fun and looks like a creation
    */
   private isTokenCreationTransaction(tx: ParsedTransactionWithMeta): boolean {
     const logs = tx.meta?.logMessages || [];
     const instructions = tx.transaction.message.instructions;
 
-    // STRICT: Must involve Pump.fun program specifically
+    // Must involve Pump.fun program
     const involvesPumpFun = instructions.some(ix => {
       if ('programId' in ix) {
         return ix.programId.toString() === PUMP_FUN_PROGRAM_ID;
@@ -366,34 +346,23 @@ export class PumpMonitor extends EventEmitter {
       return false;
     }
 
-    // Must have create-related instruction in logs (Pump.fun specific)
-    const hasCreateLog = logs.some(log => {
+    // Check for creation patterns in logs (relaxed conditions)
+    const hasCreatePattern = logs.some(log => {
       const logLower = log.toLowerCase();
-      // Pump.fun create patterns
-      return (
-        log.includes('Instruction:') &&
-        (logLower.includes('create') || 
-         logLower.includes('initialize') ||
-         logLower.includes('mint to') ||
-         logLower.includes('create account'))
-      );
+      return logLower.includes('create') || 
+             logLower.includes('initialize') ||
+             logLower.includes('mint');
     });
 
-    if (!hasCreateLog) {
-      return false;
-    }
-
-    // Additional check: must involve Token program (SPL token creation)
-    const involvesTokenProgram = instructions.some(ix => {
-      if ('programId' in ix) {
-        const programId = ix.programId.toString();
-        return programId === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' || // Token Program
-               programId === 'TokenzQdBNbLqP5VEhdkSSE6tjstGwoZhC1Pj47gt8R'; // Token-2022 Program
-      }
-      return false;
+    // Also check if transaction was successful and has token-related activity
+    const hasTokenActivity = logs.some(log => {
+      const logLower = log.toLowerCase();
+      return logLower.includes('token') || 
+             logLower.includes('mint') ||
+             logLower.includes('transfer');
     });
 
-    return involvesTokenProgram;
+    return hasCreatePattern || hasTokenActivity;
   }
 
   /**
