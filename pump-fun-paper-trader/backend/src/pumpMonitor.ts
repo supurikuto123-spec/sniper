@@ -234,9 +234,8 @@ export class PumpMonitor extends EventEmitter {
       const tokenProfile = await this.fetchTokenProfileWithDetails(mint);
       const socialLinks = tokenProfile?.socialLinks;
       
-      // DEV初期購入分析は重い処理なので、重要なチェックが通った場合のみ実行
-      // または実行を遅延させる（ここでは簡易版を使用）
-      const devInitialBuy = this.estimateDevBuy(tokenProfile?.devWallet || creator, token);
+      // DEV初期購入分析：tokenDetailsから推定（RPC呼び出しなし）
+      const devInitialBuy = this.estimateDevBuy(tokenProfile?.devWallet || creator, tokenDetails);
 
       // Calculate safety checks
       const hasTwitter = !!socialLinks?.twitter;
@@ -533,8 +532,6 @@ export class PumpMonitor extends EventEmitter {
       // DEX Screenerのtokensエンドポイントはプロファイルデータを含む
       const response = await fetch(`${DEX_SCREENER_API}/tokens/${mint}`, {
         headers: { 'Accept': 'application/json' },
-        // 429対策：キャッシュ制御
-        cache: 'default',
       });
 
       if (!response.ok) {
