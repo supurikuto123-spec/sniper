@@ -48,33 +48,33 @@ export class TradeManager extends EventEmitter {
     }
 
     // STRICT SAFETY CHECKS - All must pass
-    const checks = token.checks || {};
+    const checks = token.checks;
     
     // Check 1: Dev buy ≥ 0.5 SOL
-    const hasDevBuy = checks.devBuyLarge === true;
+    const hasDevBuy = checks?.devBuyLarge === true;
     if (!hasDevBuy) {
       console.log(`[TradeManager] SKIP ${token.symbol}: DevBuy < 0.5 SOL (${token.devInitialBuy?.toFixed(2) || 0} SOL)`);
       return;
     }
 
     // Check 2: Dev lock enabled (graduated)
-    const hasDevLock = checks.devLockEnabled === true;
+    const hasDevLock = checks?.devLockEnabled === true;
     if (!hasDevLock) {
       console.log(`[TradeManager] SKIP ${token.symbol}: DevLock not enabled (not graduated)`);
       return;
     }
 
     // Check 3: Has SNS links (Twitter or Website)
-    const hasSnsLinks = checks.hasTwitter === true || checks.hasWebsite === true;
+    const hasSnsLinks = checks?.hasTwitter === true || checks?.hasWebsite === true;
     if (!hasSnsLinks) {
-      console.log(`[TradeManager] SKIP ${token.symbol}: No SNS links (Twitter: ${checks.hasTwitter}, Website: ${checks.hasWebsite})`);
+      console.log(`[TradeManager] SKIP ${token.symbol}: No SNS links (Twitter: ${checks?.hasTwitter}, Website: ${checks?.hasWebsite})`);
       return;
     }
 
     console.log(`[TradeManager] ✓ ALL CHECKS PASSED for ${token.symbol}:`);
     console.log(`  - DevBuy: ${token.devInitialBuy?.toFixed(2)} SOL ≥ 0.5 ✓`);
-    console.log(`  - DevLock: ${checks.devLockEnabled} ✓`);
-    console.log(`  - SNS: Twitter=${checks.hasTwitter}, Web=${checks.hasWebsite} ✓`);
+    console.log(`  - DevLock: ${checks?.devLockEnabled} ✓`);
+    console.log(`  - SNS: Twitter=${checks?.hasTwitter}, Web=${checks?.hasWebsite} ✓`);
 
     // Check if we can open more positions
     if (this.config.maxPositions > 0 && this.positions.size >= this.config.maxPositions) {
