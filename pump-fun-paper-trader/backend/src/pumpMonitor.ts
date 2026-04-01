@@ -305,15 +305,15 @@ export class PumpMonitor extends EventEmitter {
         graduated: tokenDetails.graduated || false,
         signature,
         socialLinks,
-        devInitialBuy: undefined,
-        devLockEnabled: undefined,
+        devInitialBuy: 0,  // Not tracked (disabled)
+        devLockEnabled: false,  // Not checked (disabled)
         safetyScore,
         checks: {
           hasSocialLinks,
           hasTwitter,
           hasWebsite,
-          devBuyLarge: undefined,
-          devLockEnabled: undefined,
+          devBuyLarge: false,  // Not checked (disabled)
+          devLockEnabled: false,  // Not checked (disabled)
         },
       };
 
