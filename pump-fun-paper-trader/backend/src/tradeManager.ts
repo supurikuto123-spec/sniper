@@ -37,44 +37,31 @@ export class TradeManager extends EventEmitter {
 
   /**
    * Handle new token detection from blockchain
-   * STRICT: Only buys if ALL conditions met:
-   * 1. Dev buy ≥ 0.5 SOL
-   * 2. Dev lock enabled (graduated)
-   * 3. Has SNS links (Twitter or Website)
+   * STRATEGY: Buy fresh launches with SNS links
+   * Conditions:
+   * 1. New token (launched within 5 min)
+   * 2. Has SNS links (Twitter or Website) - optional bonus
    */
   async onNewToken(token: Token): Promise<void> {
     if (this.isPaused) {
       return;
     }
 
-    // STRICT SAFETY CHECKS - All must pass
+    // Check 1: Must be new token (launched within 5 minutes)
+    const ageMinutes = (Date.now() - token.createdAt) / (1000 * 60);
+    if (ageMinutes > 5) {
+      console.log(`[TradeManager] SKIP ${token.symbol}: Too old (${ageMinutes.toFixed(1)}min)`);
+      return;
+    }
+
+    // Check 2: SNS links (optional - just for info)
     const checks = token.checks;
+    const hasTwitter = checks?.hasTwitter === true;
+    const hasWebsite = checks?.hasWebsite === true;
     
-    // Check 1: Dev buy ≥ 0.5 SOL
-    const hasDevBuy = checks?.devBuyLarge === true;
-    if (!hasDevBuy) {
-      console.log(`[TradeManager] SKIP ${token.symbol}: DevBuy < 0.5 SOL (${token.devInitialBuy?.toFixed(2) || 0} SOL)`);
-      return;
-    }
-
-    // Check 2: Dev lock enabled (graduated)
-    const hasDevLock = checks?.devLockEnabled === true;
-    if (!hasDevLock) {
-      console.log(`[TradeManager] SKIP ${token.symbol}: DevLock not enabled (not graduated)`);
-      return;
-    }
-
-    // Check 3: Has SNS links (Twitter or Website)
-    const hasSnsLinks = checks?.hasTwitter === true || checks?.hasWebsite === true;
-    if (!hasSnsLinks) {
-      console.log(`[TradeManager] SKIP ${token.symbol}: No SNS links (Twitter: ${checks?.hasTwitter}, Website: ${checks?.hasWebsite})`);
-      return;
-    }
-
-    console.log(`[TradeManager] ✓ ALL CHECKS PASSED for ${token.symbol}:`);
-    console.log(`  - DevBuy: ${token.devInitialBuy?.toFixed(2)} SOL ≥ 0.5 ✓`);
-    console.log(`  - DevLock: ${checks?.devLockEnabled} ✓`);
-    console.log(`  - SNS: Twitter=${checks?.hasTwitter}, Web=${checks?.hasWebsite} ✓`);
+    console.log(`[TradeManager] ✓ NEW TOKEN DETECTED: ${token.symbol}`);
+    console.log(`  - Age: ${ageMinutes.toFixed(1)}min`);
+    console.log(`  - SNS: Twitter=${hasTwitter}, Web=${hasWebsite}`);
 
     // Check if we can open more positions
     if (this.config.maxPositions > 0 && this.positions.size >= this.config.maxPositions) {

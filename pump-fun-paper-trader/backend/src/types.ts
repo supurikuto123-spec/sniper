@@ -57,6 +57,8 @@ export interface Token {
   holderCount?: number;
   /** Whether token has graduated from Pump.fun bonding curve */
   graduated?: boolean;
+  /** DEX pair address for this token */
+  pairAddress?: string;
   /** Block height when token was detected */
   blockHeight?: number;
   /** Transaction signature that created the token */
@@ -71,11 +73,11 @@ export interface Token {
   safetyScore?: number;
   /** Individual check results */
   checks?: {
-    hasSocialLinks: boolean;
-    hasTwitter: boolean;
-    hasWebsite: boolean;
-    devBuyLarge: boolean;
-    devLockEnabled: boolean;
+    hasSocialLinks?: boolean;
+    hasTwitter?: boolean;
+    hasWebsite?: boolean;
+    devBuyLarge?: boolean;
+    devLockEnabled?: boolean;
   };
 }
 
