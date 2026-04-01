@@ -24,6 +24,16 @@ const CREATE_DISCRIMINATORS = [
   'Create', 'initialize', 'Initialize', 'create', 'mint', 'Mint'
 ];
 
+// Known token mints to EXCLUDE (SOL, stablecoins, etc.)
+const EXCLUDED_MINTS = new Set([
+  'So11111111111111111111111111111111111111112', // Wrapped SOL
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+  '7i5KKsX2weiTkry7jA4ZwSuXRhPq2h7ezpNEKQ8iEqD7', // BONK
+  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', // PEPE (if any)
+  '11111111111111111111111111111111', // System Program (not a token but safety check)
+]);
+
 export class PumpMonitor extends EventEmitter {
   private connection: Connection;
   private isRunning = false;
@@ -53,16 +63,17 @@ export class PumpMonitor extends EventEmitter {
     this.consecutiveErrors = 0;
 
     console.log('[PumpMonitor] ===========================================');
-    console.log('[PumpMonitor]  100% WORKING PUMP.FUN MONITOR');
+    console.log('[PumpMonitor]  🎯 PUMP.FUN NEW LAUNCH DETECTOR');
     console.log('[PumpMonitor] ===========================================');
     console.log('[PumpMonitor] Method: Transaction HTTP Polling');
     console.log('[PumpMonitor] Program:', PUMP_FUN_PROGRAM_ID.slice(0, 20) + '...');
     console.log('[PumpMonitor] RPC:', HELIUS_RPC_URL.replace(/api-key=.*$/, 'api-key=***'));
-    console.log('[PumpMonitor] Features:');
-    console.log('  • Monitors recent transactions');
-    console.log('  • Detects Create/Initialize/Mint instructions');
+    console.log('[PumpMonitor] Strategy:');
+    console.log('  • NEW LAUNCHES ONLY (< 5 minutes old)');
+    console.log('  • Excludes: SOL, USDC, USDT, known tokens');
+    console.log('  • SNS Links detection (Twitter/Website)');
+    console.log('  • No dev buy / dev lock requirements');
     console.log('  • 100% real blockchain data');
-    console.log('  • Works with any RPC Free plan');
     console.log('[PumpMonitor] ===========================================');
     console.log('');
 
@@ -197,18 +208,24 @@ export class PumpMonitor extends EventEmitter {
         return;
       }
 
-      // Check if this looks like a token creation
+      // Check if this is a Pump.fun token creation
       const isTokenCreation = this.isTokenCreationTransaction(tx);
 
       if (!isTokenCreation) {
         return;
       }
 
-      console.log(`[DEBUG] Found potential token creation: ${signature.slice(0, 20)}...`);
+      console.log(`[DEBUG] Found Pump.fun token creation: ${signature.slice(0, 20)}...`);
 
       // Extract mint from transaction
       const mint = await this.extractMintFromTransaction(tx, signature);
       if (!mint) {
+        return;
+      }
+
+      // Skip excluded mints (SOL, USDC, etc.)
+      if (EXCLUDED_MINTS.has(mint)) {
+        console.log(`[PumpMonitor] SKIP excluded mint: ${mint.slice(0, 16)}...`);
         return;
       }
 
@@ -222,36 +239,54 @@ export class PumpMonitor extends EventEmitter {
         return;
       }
 
+      // Skip known tokens by symbol/name (SOL, USDC, etc.)
+      const symbolUpper = tokenDetails.symbol?.toUpperCase() || '';
+      const nameUpper = tokenDetails.name?.toUpperCase() || '';
+      const excludedSymbols = ['SOL', 'USDC', 'USDT', 'BONK', 'WIF', 'JUP', 'RAY', 'ORCA'];
+      if (excludedSymbols.includes(symbolUpper) || excludedSymbols.includes(nameUpper)) {
+        console.log(`[PumpMonitor] SKIP known token: ${tokenDetails.symbol}`);
+        return;
+      }
+
       // Skip if price is 0 (not launched yet)
       if (tokenDetails.priceUsd === 0) {
+        return;
+      }
+
+      // 新規トークンのみ検出：作成から5分以内かチェック
+      const txTime = tx.blockTime ? tx.blockTime * 1000 : Date.now();
+      const now = Date.now();
+      const ageMinutes = (now - txTime) / (1000 * 60);
+      
+      if (ageMinutes > 5) {
+        console.log(`[PumpMonitor] SKIP old token: ${tokenDetails.symbol} (${ageMinutes.toFixed(1)}min old)`);
+        return;
+      }
+
+      // 既存トークン（SOLなど）を除外 - Pump.funの新規作成のみ対象
+      const isNewToken = tokenDetails.marketCap && tokenDetails.marketCap < 1000000; // <$1M MC
+      if (!isNewToken) {
+        console.log(`[PumpMonitor] SKIP existing token: ${tokenDetails.symbol} (MC: $${tokenDetails.marketCap})`);
         return;
       }
 
       // Fetch additional security checks
       const creator = this.extractCreator(tx);
       
-      // SNSリンクとトークン詳細を同時取得（効率化）
+      // SNSリンクを取得
       const tokenProfile = await this.fetchTokenProfileWithDetails(mint);
       const socialLinks = tokenProfile?.socialLinks;
-      
-      // DEV初期購入分析：tokenDetailsから推定（RPC呼び出しなし）
-      const devInitialBuy = this.estimateDevBuy(tokenProfile?.devWallet || creator, tokenDetails);
 
-      // Calculate safety checks
+      // Calculate safety checks (SNSのみ)
       const hasTwitter = !!socialLinks?.twitter;
       const hasWebsite = !!socialLinks?.website;
       const hasSocialLinks = hasTwitter || hasWebsite;
-      const devBuyLarge = (devInitialBuy || 0) >= 0.5;
 
-      // DEV lock is approximated: if graduated, liquidity is "locked" in DEX
-      const devLockEnabled = tokenDetails.graduated || false;
-
-      // Calculate safety score (0-100)
+      // Safety score (SNSのみ)
       let safetyScore = 0;
-      if (hasTwitter) safetyScore += 25;
-      if (hasWebsite) safetyScore += 15;
-      if (devBuyLarge) safetyScore += 30;
-      if (devLockEnabled) safetyScore += 30;
+      if (hasTwitter) safetyScore += 40;
+      if (hasWebsite) safetyScore += 30;
+      if (hasSocialLinks) safetyScore += 30;
 
       this.addProcessedSignature(mint);
 
@@ -270,15 +305,15 @@ export class PumpMonitor extends EventEmitter {
         graduated: tokenDetails.graduated || false,
         signature,
         socialLinks,
-        devInitialBuy,
-        devLockEnabled,
+        devInitialBuy: undefined,
+        devLockEnabled: undefined,
         safetyScore,
         checks: {
           hasSocialLinks,
           hasTwitter,
           hasWebsite,
-          devBuyLarge,
-          devLockEnabled,
+          devBuyLarge: undefined,
+          devLockEnabled: undefined,
         },
       };
 
@@ -294,15 +329,15 @@ export class PumpMonitor extends EventEmitter {
 
       this.emit('token', event);
 
-      // Log with checks
+      // Log new token detection (SNS links focus, no dev buy/lock)
       console.log('');
       console.log('╔════════════════════════════════════════════════════╗');
-      console.log(`║  NEW TOKEN: ${token.symbol.padEnd(36)} ║`);
+      console.log(`║  🚀 NEW PUMP.FUN TOKEN: ${token.symbol.padEnd(28)} ║`);
       console.log('╚════════════════════════════════════════════════════╝');
       console.log(`  Mint: ${mint}`);
       console.log(`  Price: $${(token.priceUsd || 0).toFixed(10)} | MC: $${(token.marketCap || 0).toFixed(2)} | Liq: $${(token.liquidityUsd || 0).toFixed(2)}`);
-      console.log(`  Safety Score: ${safetyScore}/100 ${safetyScore >= 70 ? '✓ SAFE' : safetyScore >= 40 ? '⚠ MEDIUM' : '✗ RISKY'}`);
-      console.log(`  Checks: Twitter:${hasTwitter ? '✓' : '✗'} | Web:${hasWebsite ? '✓' : '✗'} | DevBuy:${devBuyLarge ? '✓' : '✗'}(${devInitialBuy?.toFixed(2) || 0}SOL) | Lock:${devLockEnabled ? '✓' : '✗'}`);
+      console.log(`  SNS Links: Twitter:${hasTwitter ? '✓' : '✗'} | Website:${hasWebsite ? '✓' : '✗'} | Score: ${safetyScore}/100`);
+      console.log(`  Launch: ${ageMinutes.toFixed(1)}min ago | Status: FRESH LAUNCH ✓`);
       console.log(`  TX: https://solscan.io/tx/${signature}`);
       console.log('');
 
@@ -312,7 +347,8 @@ export class PumpMonitor extends EventEmitter {
   }
 
   /**
-   * Check if transaction is a token creation
+   * Check if transaction is a Pump.fun token creation (NEW LAUNCH ONLY)
+   * Filters: Must be Pump.fun program, must have create instruction, must be recent
    */
   private isTokenCreationTransaction(tx: ParsedTransactionWithMeta): boolean {
     const logs = tx.meta?.logMessages || [];
@@ -330,23 +366,34 @@ export class PumpMonitor extends EventEmitter {
       return false;
     }
 
-    // Check logs for token creation event - must have BOTH program invocation AND create keyword
-    const hasCreateLog = logs.some(log =>
-      log.includes('Instruction:') &&
-      CREATE_DISCRIMINATORS.some(d => log.toLowerCase().includes(d.toLowerCase()))
-    );
+    // Must have create-related instruction in logs (Pump.fun specific)
+    const hasCreateLog = logs.some(log => {
+      const logLower = log.toLowerCase();
+      // Pump.fun create patterns
+      return (
+        log.includes('Instruction:') &&
+        (logLower.includes('create') || 
+         logLower.includes('initialize') ||
+         logLower.includes('mint to') ||
+         logLower.includes('create account'))
+      );
+    });
 
-    if (hasCreateLog) {
-      return true;
+    if (!hasCreateLog) {
+      return false;
     }
 
-    // Check for Pump.fun specific token creation patterns in logs
-    const hasPumpFunCreate = logs.some(log =>
-      log.includes('Create') &&
-      (log.includes('mint') || log.includes('token'))
-    );
+    // Additional check: must involve Token program (SPL token creation)
+    const involvesTokenProgram = instructions.some(ix => {
+      if ('programId' in ix) {
+        const programId = ix.programId.toString();
+        return programId === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' || // Token Program
+               programId === 'TokenzQdBNbLqP5VEhdkSSE6tjstGwoZhC1Pj47gt8R'; // Token-2022 Program
+      }
+      return false;
+    });
 
-    return hasPumpFunCreate;
+    return involvesTokenProgram;
   }
 
   /**
@@ -386,13 +433,13 @@ export class PumpMonitor extends EventEmitter {
       const accountKeys = message.accountKeys;
       for (const account of accountKeys) {
         const pubkey = account.pubkey.toString();
-        // Skip common programs
+        // Skip common programs and excluded mints
         if ([
           '11111111111111111111111111111111', // System
           'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // Token
           'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', // ATA
           PUMP_FUN_PROGRAM_ID,
-        ].includes(pubkey)) {
+        ].includes(pubkey) || EXCLUDED_MINTS.has(pubkey)) {
           continue;
         }
 
